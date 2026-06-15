@@ -237,7 +237,7 @@ class SipServer:
             call_id,
             codec,
             payload_type,
-            self.listen_address(),
+            self.advertised_address(),
             local_rtp_port,
             self.config.listen_address,
             local_rtp_port,
@@ -443,7 +443,7 @@ class SipServer:
             session.media_session = self.create_media_session(session)
             await session.media_session.prepare()
         session.sdp_answer = build_sdp_answer(
-            self.listen_address(),
+            self.advertised_address(),
             session.local_rtp_port,
             session.codec,
             session.payload_type,
@@ -458,7 +458,7 @@ class SipServer:
             return self.media_session_factory(session)
         return GStreamerWebRtcBridge(
             call_id=session.call_id,
-            local_media_ip=self.listen_address(),
+            local_media_ip=self.advertised_address(),
             local_bind_ip=self.config.listen_address,
             local_rtp_port=session.local_rtp_port,
             remote_rtp_ip=session.remote_ip,
@@ -488,6 +488,9 @@ class SipServer:
     def listen_address(self) -> str:
         return self.config.listen_address
 
+    def advertised_address(self) -> str:
+        return self.config.sip_advertised_address or self.config.listen_address
+
     def start_media_nowait(self, session: CallSession) -> None:
         if session.media_session is None:
             return
@@ -508,7 +511,7 @@ class SipServer:
         headers = Headers()
         headers.add(
             "Via",
-            f"SIP/2.0/UDP {self.config.listen_address}:{self.config.sip_port};branch=z9hG4bK-{secrets.token_hex(8)}",
+            f"SIP/2.0/UDP {self.advertised_address()}:{self.config.sip_port};branch=z9hG4bK-{secrets.token_hex(8)}",
         )
         headers.add("Max-Forwards", "70")
         headers.add("From", self.local_dialog_header(session))
@@ -521,13 +524,13 @@ class SipServer:
         return SipRequest(method="BYE", uri=session.remote_target_uri, headers=headers)
 
     def local_dialog_header(self, session: CallSession) -> str:
-        header = session.invite_request.headers.get("To") or f"<sip:sip_indoor_station@{self.config.listen_address}>"
+        header = session.invite_request.headers.get("To") or f"<sip:sip_indoor_station@{self.advertised_address()}>"
         if "tag=" in header.lower():
             return header
         return f"{header};tag={session.local_to_tag}"
 
     def server_contact_header(self) -> str:
-        return f"<sip:sip_indoor_station@{self.config.listen_address}:{self.config.sip_port}>"
+        return f"<sip:sip_indoor_station@{self.advertised_address()}:{self.config.sip_port}>"
 
     def next_local_cseq(self, remote_cseq: str) -> int:
         try:

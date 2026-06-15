@@ -365,6 +365,38 @@ def test_sdp_answer_uses_listen_address_not_loopback() -> None:
     asyncio.run(run())
 
 
+def test_sdp_answer_can_use_advertised_address_separate_from_bind_address() -> None:
+    async def run() -> None:
+        config = Config(
+            sip_realm="sip.local",
+            listen_address="0.0.0.0",
+            sip_advertised_address="192.168.1.10",
+            sip_users={"door": SipUser(username="door", password="secret", realm="sip.local")},
+        )
+        registrations = RegistrationRegistry()
+        registrations.register("door", "sip:door@192.168.1.20:5060", "192.168.1.20", 5060, "DoorStation")
+        server = SipServer(
+            config,
+            registrations=registrations,
+            port_allocator=FakePortAllocator(),
+            media_session_factory=lambda _session: FakeMediaSession(),
+        )
+        transport = FakeTransport()
+        server.transport = transport  # type: ignore[assignment]
+        request = invite_with_sdp("0", "a=rtpmap:0 PCMU/8000\r\n")
+        server.handle_invite(request, ("192.168.1.20", 5060))
+
+        await server.answer_current_call()
+
+        raw = transport.sent[-1][0].decode()
+        assert "c=IN IP4 192.168.1.10" in raw
+        assert "c=IN IP4 0.0.0.0" not in raw
+
+    import asyncio
+
+    asyncio.run(run())
+
+
 def test_cancel_sets_cancelled_state_event() -> None:
     async def run() -> None:
         events = []

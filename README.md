@@ -29,6 +29,7 @@ Common environment variables:
 
 ```bash
 export LISTEN_ADDRESS=0.0.0.0
+export SIP_ADVERTISED_ADDRESS=
 export SIP_PORT=5060
 export SIP_REALM=sip.local
 export SIP_USERNAME=door
@@ -42,6 +43,8 @@ sip-indoor-station
 ```
 
 Set `SIP_REGISTRATION_STORE_PATH` to a JSON file path to persist unexpired SIP registrations across restarts. The Home Assistant add-on sets this to `/data/sip_registrations.json`.
+
+Set `SIP_ADVERTISED_ADDRESS` when `LISTEN_ADDRESS` is `0.0.0.0` but SIP/SDP must advertise a reachable LAN address. In Docker or Home Assistant add-on setups this is usually the Home Assistant host address, for example `192.168.8.3`.
 
 ## Home Assistant Add-on
 
@@ -173,7 +176,8 @@ If your Python environment does not use the system `python3-gi`, install PyGObje
 Common WebRTC/media environment variables:
 
 ```bash
-export LISTEN_ADDRESS0.0.0.0
+export LISTEN_ADDRESS=0.0.0.0
+export SIP_ADVERTISED_ADDRESS=
 export RTP_PORT_MIN=40000
 export RTP_PORT_MAX=40100
 export RTP_JITTER_BUFFER_MS=60
