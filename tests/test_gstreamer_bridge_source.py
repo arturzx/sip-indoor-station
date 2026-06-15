@@ -189,20 +189,31 @@ def test_gstreamer_bridge_fixes_ice_udp_port_when_configured() -> None:
     assert 'ice_agent.set_property("min-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("max-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("ice-tcp", False)' in source
-    assert 'self._gst.ElementFactory.make_with_properties(' in source
+    assert 'webrtc.get_property("ice-agent")' in source
+    assert "make_with_properties" not in source
 
 
-def test_gstreamer_bridge_configures_ice_agent_before_webrtcbin_construction() -> None:
+def test_gstreamer_bridge_configures_ice_agent_before_ready() -> None:
     source = Path("src/sip_indoor_station/media/gstreamer_webrtc_bridge.py").read_text()
-    create_agent_index = source.index("ice_agent = self._create_fixed_port_ice_agent()")
-    construct_index = source.index('self._gst.ElementFactory.make_with_properties(')
+    build_index = source.index("self.pipeline, self.webrtc = self._build_pipeline()")
+    ready_index = source.index("set_state(self._gst.State.READY)")
 
-    assert create_agent_index < construct_index
+    assert build_index < ready_index
+    assert "self._configure_fixed_ice_udp_port(webrtc)" in source
     assert 'ice_agent.set_property("min-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("max-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("ice-tcp", False)' in source
     assert "ice-agent::min-rtp-port" not in source
     assert "ice-agent::max-rtp-port" not in source
+
+
+def test_gstreamer_bridge_disconnects_signals_before_teardown() -> None:
+    source = Path("src/sip_indoor_station/media/gstreamer_webrtc_bridge.py").read_text()
+    assert "self._disconnect_gstreamer_signals()" in source
+    assert "self._bus.remove_signal_watch()" in source
+    assert "self.pipeline.remove(self.webrtc)" in source
+    assert "self.pipeline.remove(self._browser_audio_bin)" in source
+    assert source.index("self._disconnect_gstreamer_signals()") < source.index("set_state(self._gst.State.NULL)")
 
 
 def test_gstreamer_bridge_rejects_invalid_fixed_ice_udp_port() -> None:
