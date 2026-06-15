@@ -1,6 +1,6 @@
 # SIP Indoor Station
 
-Minimal SIP server and WebRTC audio bridge for SIP-capable home door stations on a LAN. It is meant to be a simple direct setup for home deployments where running a full PBX such as Asterisk would be unnecessary overhead.
+Minimal SIP server and WebRTC audio bridge for SIP-capable home door stations on a LAN. It is meant to be a simple direct setup for home deployments where running a full PBX such as Asterisk with complicates configuration would be unnecessary overhead.
 
 The project is intended to stay vendor-neutral at the SIP/WebRTC layer. 
 
@@ -16,7 +16,7 @@ This project currently implements:
 - SDP parsing and a minimal PCMA/PCMU SDP answer with video rejection
 - GStreamer WebRTC audio bridge for PCMU/8000 / PCMA/8000 RTP audio
 
-It intentionally does not implement tablet UI, H264 video bridging, or a full RFC-complete SIP stack. Vendor-specific features should stay optional; HikVision ISAPI support is currently used only for optional door control and maintenance actions.
+It intentionally does not implement H264 video bridging, or a full RFC-complete SIP stack. Vendor-specific features should stay optional; HikVision ISAPI support is currently used only for optional door control and maintenance actions.
 
 ## Run
 
@@ -29,7 +29,7 @@ Common environment variables:
 
 ```bash
 export LISTEN_ADDRESS=0.0.0.0
-export SIP_ADVERTISED_ADDRESS=
+export LOCAL_ADDRESS=
 export SIP_PORT=5060
 export SIP_REALM=sip.local
 export SIP_USERNAME=door
@@ -44,7 +44,7 @@ sip-indoor-station
 
 Set `SIP_REGISTRATION_STORE_PATH` to a JSON file path to persist unexpired SIP registrations across restarts. The Home Assistant add-on sets this to `/data/sip_registrations.json`.
 
-Set `SIP_ADVERTISED_ADDRESS` when `LISTEN_ADDRESS` is `0.0.0.0` but SIP/SDP must advertise a reachable LAN address. In Docker or Home Assistant add-on setups this is usually the Home Assistant host address, for example `192.168.8.3`.
+Set `LOCAL_ADDRESS` when `LISTEN_ADDRESS` is `0.0.0.0` but SIP/SDP must advertise a reachable LAN address. In Docker or Home Assistant add-on setups this is usually the Home Assistant host address, for example `192.168.0.123`. This address is also used as the first configured WebRTC host ICE candidate.
 
 ## Home Assistant Add-on
 
@@ -114,7 +114,7 @@ Configure the door station HTTP API credentials:
 
 ```bash
 export ISAPI_ENABLED=true
-export ISAPI_HOST=192.168.8.163
+export ISAPI_HOST=192.168.0.234
 export ISAPI_PORT=80
 export ISAPI_USERNAME=admin
 export ISAPI_PASSWORD=change-me
@@ -177,7 +177,7 @@ Common WebRTC/media environment variables:
 
 ```bash
 export LISTEN_ADDRESS=0.0.0.0
-export SIP_ADVERTISED_ADDRESS=
+export LOCAL_ADDRESS=
 export RTP_PORT_MIN=40000
 export RTP_PORT_MAX=40100
 export RTP_JITTER_BUFFER_MS=60
@@ -207,7 +207,7 @@ export WEBRTC_STUN_SERVERS=stun:stun1.example.com:3478,stun:stun2.example.com:34
 
 The browser receives all configured STUN servers. GStreamer `webrtcbin` currently exposes one `stun-server` property, so the bridge uses the first configured STUN server for GStreamer and logs when additional STUN servers are present.
 
-For port-forwarded or NAT-crossing access, prefer a TURN server and `WEBRTC_ICE_TRANSPORT_POLICY=relay`. For direct host candidates without TURN, set `WEBRTC_ICE_UDP_PORT` and forward that UDP port; forwarding only the HTTP/WebSocket port is not enough.
+For port-forwarded or NAT-crossing access, prefer a TURN server and `WEBRTC_ICE_TRANSPORT_POLICY=relay`. For direct host candidates without TURN, set `WEBRTC_ICE_UDP_PORT` and forward that one UDP port. Do not forward other ports like HTTP/WebSocket or SIP.
 
 Open the browser demo during an active answered SIP call:
 
@@ -215,4 +215,4 @@ Open the browser demo during an active answered SIP call:
 http://<sip-indoor-station-host>:8080/
 ```
 
-Click `Connect WebRTC`, allow microphone access, and the browser will exchange audio with the door station through GStreamer.
+Click `Answer` followed by `Connect WebRTC`, allow microphone access, and the browser will exchange audio with the door station through GStreamer RTP-WebRTC bridge.

@@ -29,11 +29,12 @@ def test_browser_client_loads_webrtc_ice_config_before_peer_connection() -> None
     assert source.index("await loadWebRtcConfig()") < source.index("new RTCPeerConnection({")
 
 
-def test_browser_client_adds_configured_ice_candidates_after_answer() -> None:
+def test_browser_client_uses_websocket_ice_candidates_only() -> None:
     source = Path("src/sip_indoor_station/web/static/client.js").read_text()
-    assert "iceCandidates: config.iceCandidates || []" in source
-    assert "await addConfiguredIceCandidates(webrtcConfig.iceCandidates)" in source
-    assert source.index("setRemoteDescription") < source.index("addConfiguredIceCandidates")
+    assert "addConfiguredIceCandidates" not in source
+    assert "iceCandidates: config.iceCandidates || []" not in source
+    assert 'message.type === "ice"' in source
+    assert "await pc.addIceCandidate(message.candidate)" in source
 
 
 def test_browser_client_keeps_remote_audio_stream_and_play_button() -> None:

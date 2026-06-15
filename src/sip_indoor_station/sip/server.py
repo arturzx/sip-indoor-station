@@ -472,7 +472,7 @@ class SipServer:
             turn_username=self.config.webrtc_turn_username,
             turn_password=self.config.webrtc_turn_password,
             ice_transport_policy=self.config.webrtc_ice_transport_policy,
-            ice_candidates=self.config.webrtc_ice_candidates,
+            ice_candidates=self.local_ice_candidates(),
             ice_udp_port=self.config.webrtc_ice_udp_port,
         )
 
@@ -489,7 +489,13 @@ class SipServer:
         return self.config.listen_address
 
     def advertised_address(self) -> str:
-        return self.config.sip_advertised_address or self.config.listen_address
+        return self.config.local_address or self.config.listen_address
+
+    def local_ice_candidates(self) -> list[str]:
+        candidates = list(self.config.webrtc_ice_candidates)
+        if self.config.local_address:
+            return [self.config.local_address, *candidates]
+        return candidates
 
     def start_media_nowait(self, session: CallSession) -> None:
         if session.media_session is None:

@@ -141,40 +141,21 @@ def test_webrtc_signaling_builds_browser_ice_servers_from_lists() -> None:
     ]
 
 
-def test_webrtc_signaling_builds_browser_ice_candidates_from_configured_hosts() -> None:
-    event_bus = EventBus()
-    server = AppHttpServer(
+def test_webrtc_signaling_does_not_expose_configured_ice_candidates_to_browser_config() -> None:
+    server = make_server(
         Config(
             webrtc_ice_candidates=["51.68.137.6:8556", "192.168.8.3"],
             webrtc_ice_udp_port=8556,
         ),
-        event_bus,
+        EventBus(),
         lambda: None,
-        StateApi(event_bus, FakeController()),
     )
-    assert server.browser_ice_candidates() == [
-        {
-            "candidate": "candidate:configured1 1 udp 2130706431 51.68.137.6 8556 typ host",
-            "sdpMid": "0",
-            "sdpMLineIndex": 0,
-        },
-        {
-            "candidate": "candidate:configured2 1 udp 2130706431 192.168.8.3 8556 typ host",
-            "sdpMid": "0",
-            "sdpMLineIndex": 0,
-        },
-    ]
-
-
-def test_webrtc_signaling_skips_configured_ice_candidate_without_port() -> None:
-    event_bus = EventBus()
-    server = AppHttpServer(
-        Config(webrtc_ice_candidates=["192.168.8.3"]),
-        event_bus,
-        lambda: None,
-        StateApi(event_bus, FakeController()),
-    )
-    assert server.browser_ice_candidates() == []
+    response = asyncio.run(server.client_config(None))
+    payload = json.loads(response.text)
+    assert payload == {
+        "iceServers": [],
+        "iceTransportPolicy": "all",
+    }
 
 
 def test_webrtc_single_peer_policy_error_message() -> None:

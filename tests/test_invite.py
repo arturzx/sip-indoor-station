@@ -370,7 +370,7 @@ def test_sdp_answer_can_use_advertised_address_separate_from_bind_address() -> N
         config = Config(
             sip_realm="sip.local",
             listen_address="0.0.0.0",
-            sip_advertised_address="192.168.1.10",
+            local_address="192.168.1.10",
             sip_users={"door": SipUser(username="door", password="secret", realm="sip.local")},
         )
         registrations = RegistrationRegistry()
@@ -395,6 +395,25 @@ def test_sdp_answer_can_use_advertised_address_separate_from_bind_address() -> N
     import asyncio
 
     asyncio.run(run())
+
+
+def test_local_address_is_first_webrtc_ice_candidate() -> None:
+    config = Config(
+        sip_realm="sip.local",
+        listen_address="0.0.0.0",
+        local_address="192.168.1.10",
+        webrtc_ice_candidates=["51.68.137.6:8556"],
+        sip_users={"door": SipUser(username="door", password="secret", realm="sip.local")},
+    )
+    server = SipServer(
+        config,
+        registrations=RegistrationRegistry(),
+        port_allocator=FakePortAllocator(),
+        media_session_factory=lambda _session: FakeMediaSession(),
+    )
+
+    assert server.advertised_address() == "192.168.1.10"
+    assert server.local_ice_candidates() == ["192.168.1.10", "51.68.137.6:8556"]
 
 
 def test_cancel_sets_cancelled_state_event() -> None:

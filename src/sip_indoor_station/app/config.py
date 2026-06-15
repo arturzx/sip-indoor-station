@@ -35,7 +35,7 @@ class SipUser:
 @dataclass(frozen=True)
 class Config:
     listen_address: str = os.getenv("LISTEN_ADDRESS", "0.0.0.0")
-    sip_advertised_address: str | None = os.getenv("SIP_ADVERTISED_ADDRESS")
+    local_address: str | None = os.getenv("LOCAL_ADDRESS")
     sip_port: int = int(os.getenv("SIP_PORT", "5060"))
     sip_realm: str = os.getenv("SIP_REALM", "sip.local")
     sip_nonce_ttl: int = int(os.getenv("SIP_NONCE_TTL", "300"))

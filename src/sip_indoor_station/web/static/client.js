@@ -154,7 +154,6 @@ async function connect() {
     const message = JSON.parse(event.data);
     if (message.type === "answer") {
       await pc.setRemoteDescription({ type: "answer", sdp: message.sdp });
-      await addConfiguredIceCandidates(webrtcConfig.iceCandidates);
       statusEl.textContent = "Connected";
       log("answer applied");
     } else if (message.type === "ice") {
@@ -205,19 +204,11 @@ async function loadWebRtcConfig() {
     throw new Error(`WebRTC config failed: ${response.status}`);
   }
   const config = await response.json();
-  log(`ICE servers=${config.iceServers.length} candidates=${(config.iceCandidates || []).length} policy=${config.iceTransportPolicy}`);
+  log(`ICE servers=${config.iceServers.length} policy=${config.iceTransportPolicy}`);
   return {
     iceServers: config.iceServers,
-    iceCandidates: config.iceCandidates || [],
     iceTransportPolicy: config.iceTransportPolicy || "all",
   };
-}
-
-async function addConfiguredIceCandidates(candidates) {
-  for (const candidate of candidates || []) {
-    await pc.addIceCandidate(candidate);
-    log("configured remote ICE");
-  }
 }
 
 function disconnect() {

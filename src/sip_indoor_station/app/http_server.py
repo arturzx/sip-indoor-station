@@ -67,7 +67,6 @@ class AppHttpServer:
         return web.json_response(
             {
                 "iceServers": self.browser_ice_servers(),
-                "iceCandidates": self.browser_ice_candidates(),
                 "iceTransportPolicy": self.config.webrtc_ice_transport_policy,
             }
         )
@@ -84,37 +83,6 @@ class AppHttpServer:
                 server["credential"] = self.config.webrtc_turn_password
             ice_servers.append(server)
         return ice_servers
-
-    def browser_ice_candidates(self) -> list[dict[str, Any]]:
-        ice_candidates: list[dict[str, Any]] = []
-        for index, configured_candidate in enumerate(self.config.webrtc_ice_candidates, start=1):
-            host, port = self.parse_configured_ice_candidate(configured_candidate)
-            if port is None:
-                port = self.config.webrtc_ice_udp_port
-            if not host or port is None:
-                continue
-            ice_candidates.append(
-                {
-                    "candidate": f"candidate:configured{index} 1 udp 2130706431 {host} {port} typ host",
-                    "sdpMid": "0",
-                    "sdpMLineIndex": 0,
-                }
-            )
-        return ice_candidates
-
-    @staticmethod
-    def parse_configured_ice_candidate(configured_candidate: str) -> tuple[str, int | None]:
-        configured_candidate = configured_candidate.strip()
-        if configured_candidate.startswith("["):
-            host, separator, rest = configured_candidate[1:].partition("]")
-            if separator and rest.startswith(":") and rest[1:].isdigit():
-                return host, int(rest[1:])
-            return configured_candidate, None
-        if configured_candidate.count(":") == 1:
-            host, separator, port_text = configured_candidate.rpartition(":")
-            if separator and port_text.isdigit():
-                return host, int(port_text)
-        return configured_candidate, None
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
