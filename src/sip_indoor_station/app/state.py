@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+from sip_indoor_station import __version__
 from sip_indoor_station.app.events import AppEvent, utc_now
 
 
@@ -18,6 +19,7 @@ def iso_timestamp(value: datetime) -> str:
 
 @dataclass
 class AppState:
+    version: str = __version__
     registered: bool = False
     registration_user: str | None = None
     registration_source: str | None = None

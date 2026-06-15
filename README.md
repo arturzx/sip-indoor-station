@@ -79,7 +79,7 @@ State endpoint:
 GET /api/state
 ```
 
-The response includes `registered`, `ringing`, `in_call`, `call_state`, registration data, selected codec data, and last event metadata.
+The response includes `version`, `registered`, `ringing`, `in_call`, `call_state`, registration data, selected codec data, and last event metadata.
 
 Command endpoints:
 

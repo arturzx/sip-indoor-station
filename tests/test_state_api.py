@@ -4,6 +4,7 @@ import asyncio
 import json
 
 from sip_indoor_station.api.state_api import StateApi
+from sip_indoor_station import __version__
 from sip_indoor_station.app.events import AppEvent, EventBus
 
 
@@ -108,6 +109,7 @@ def test_get_state_returns_json_snapshot() -> None:
         api.state.registered = True
         response = await api.get_state(None)  # type: ignore[arg-type]
         payload = json.loads(response.text)
+        assert payload["version"] == __version__
         assert payload["registered"] is True
         assert payload["ringing"] is False
         assert payload["in_call"] is False
