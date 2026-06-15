@@ -185,7 +185,7 @@ def test_gstreamer_bridge_fixes_ice_udp_port_when_configured() -> None:
     source = Path("src/sip_indoor_station/media/gstreamer_webrtc_bridge.py").read_text()
     pipeline = bridge._pipeline_description()
 
-    assert "webrtcbin" not in pipeline
+    assert "webrtcbin name=webrtc" in pipeline
     assert 'ice_agent.set_property("min-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("max-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("ice-tcp", False)' in source
@@ -193,13 +193,18 @@ def test_gstreamer_bridge_fixes_ice_udp_port_when_configured() -> None:
     assert "make_with_properties" not in source
 
 
-def test_gstreamer_bridge_configures_ice_agent_before_ready() -> None:
+def test_gstreamer_bridge_parses_pipeline_and_configures_ice_agent_before_ready() -> None:
     source = Path("src/sip_indoor_station/media/gstreamer_webrtc_bridge.py").read_text()
     build_index = source.index("self.pipeline, self.webrtc = self._build_pipeline()")
     ready_index = source.index("set_state(self._gst.State.READY)")
 
     assert build_index < ready_index
-    assert "self._configure_fixed_ice_udp_port(webrtc)" in source
+    assert "self._gst.parse_launch(self._pipeline_description())" in source
+    assert 'pipeline.get_by_name("webrtc")' in source
+    assert 'webrtc.get_property("ice-agent")' in source
+    assert "ctypes.pythonapi.Py_IncRef(py_object)" in source
+    assert "self._ice_agent" not in source
+    assert source.index('webrtc.get_property("ice-agent")') < source.index("ctypes.pythonapi.Py_IncRef(py_object)")
     assert 'ice_agent.set_property("min-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("max-rtp-port", self.ice_udp_port)' in source
     assert 'ice_agent.set_property("ice-tcp", False)' in source
@@ -207,13 +212,19 @@ def test_gstreamer_bridge_configures_ice_agent_before_ready() -> None:
     assert "ice-agent::max-rtp-port" not in source
 
 
-def test_gstreamer_bridge_disconnects_signals_before_teardown() -> None:
+def test_gstreamer_bridge_uses_simple_null_cleanup() -> None:
     source = Path("src/sip_indoor_station/media/gstreamer_webrtc_bridge.py").read_text()
     assert "self._disconnect_gstreamer_signals()" in source
     assert "self._bus.remove_signal_watch()" in source
-    assert "self.pipeline.remove(self.webrtc)" in source
-    assert "self.pipeline.remove(self._browser_audio_bin)" in source
+    assert "self.pipeline.set_state(self._gst.State.NULL)" in source
+    assert "self.pipeline = None" in source
+    assert "self.webrtc = None" in source
+    assert "self._close_webrtcbin()" not in source
+    assert "self._wait_for_pipeline_null_state()" not in source
+    assert "_RETIRED_GSTREAMER_GRAPHS" not in source
+    assert "pipeline.remove" not in source
     assert source.index("self._disconnect_gstreamer_signals()") < source.index("set_state(self._gst.State.NULL)")
+    assert source.index("set_state(self._gst.State.NULL)") < source.index("self.pipeline = None")
 
 
 def test_gstreamer_bridge_rejects_invalid_fixed_ice_udp_port() -> None:
