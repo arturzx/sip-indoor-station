@@ -48,6 +48,12 @@ def redact_sip_text(data: bytes | str) -> str:
     return re.sub(r'(response=)(?:"[^"]+"|[^,\s]+)', r'\1"<redacted>"', text)
 
 
+def contact_with_expires(contact: str, expires: int) -> str:
+    if re.search(r"(?:^|;)\s*expires\s*=", contact, re.IGNORECASE):
+        return re.sub(r"((?:^|;)\s*expires\s*=\s*)\d+", rf"\g<1>{expires}", contact, flags=re.IGNORECASE)
+    return f"{contact};expires={expires}"
+
+
 class SipDatagramProtocol(asyncio.DatagramProtocol):
     def __init__(self, server: "SipServer") -> None:
         self.server = server
@@ -179,7 +185,15 @@ class SipServer:
                 "registration_removed",
                 data={"username": user.username, "source": f"{addr[0]}:{addr[1]}"},
             )
-        return response_from_request(request, 200, "OK", [("Contact", request.headers["Contact"])])
+        return response_from_request(
+            request,
+            200,
+            "OK",
+            [
+                ("Contact", contact_with_expires(request.headers["Contact"], expires)),
+                ("Expires", str(expires)),
+            ],
+        )
 
     def unauthorized(self, request: SipRequest) -> SipResponse:
         nonce = self.nonce_store.generate()

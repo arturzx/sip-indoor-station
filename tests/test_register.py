@@ -18,7 +18,11 @@ def make_server(sip_registration_store_path: str | None = None) -> SipServer:
     return SipServer(config)
 
 
-def register_message(auth: str | None = None, expires: str | None = None) -> SipRequest:
+def register_message(
+    auth: str | None = None,
+    expires: str | None = None,
+    contact: str = "<sip:door@192.168.1.20:5060>",
+) -> SipRequest:
     headers = [
         "REGISTER sip:server SIP/2.0",
         "Via: SIP/2.0/UDP 192.168.1.20:5060;branch=z9hG4bK-1",
@@ -26,7 +30,7 @@ def register_message(auth: str | None = None, expires: str | None = None) -> Sip
         "To: <sip:door@sip.local>",
         "Call-ID: call-1",
         "CSeq: 1 REGISTER",
-        "Contact: <sip:door@192.168.1.20:5060>",
+        f"Contact: {contact}",
         "User-Agent: DoorStation",
     ]
     if expires is not None:
@@ -67,6 +71,8 @@ def test_storing_successful_registration() -> None:
     server = make_server()
     response = server.handle_register(register_message(authorization(server)), ("192.168.1.20", 5060))
     assert response.status_code == 200
+    assert response.headers["Contact"] == "<sip:door@192.168.1.20:5060>;expires=3600"
+    assert response.headers["Expires"] == "3600"
     registration = server.registrations.get("door")
     assert registration is not None
     assert registration.contact_uri == "sip:door@192.168.1.20:5060"
@@ -81,7 +87,32 @@ def test_unregistering_with_expires_zero() -> None:
     assert server.registrations.get("door") is not None
     response = server.handle_register(register_message(authorization(server), expires="0"), ("192.168.1.20", 5060))
     assert response.status_code == 200
+    assert response.headers["Contact"] == "<sip:door@192.168.1.20:5060>;expires=0"
+    assert response.headers["Expires"] == "0"
     assert server.registrations.get("door") is None
+
+
+def test_register_response_confirms_expires_header() -> None:
+    server = make_server()
+    response = server.handle_register(register_message(authorization(server), expires="120"), ("192.168.1.20", 5060))
+
+    assert response.status_code == 200
+    assert response.headers["Contact"] == "<sip:door@192.168.1.20:5060>;expires=120"
+    assert response.headers["Expires"] == "120"
+
+
+def test_register_response_confirms_contact_expires_parameter() -> None:
+    server = make_server()
+    request = register_message(
+        authorization(server),
+        contact="<sip:door@192.168.1.20:5060>;expires=90",
+    )
+
+    response = server.handle_register(request, ("192.168.1.20", 5060))
+
+    assert response.status_code == 200
+    assert response.headers["Contact"] == "<sip:door@192.168.1.20:5060>;expires=90"
+    assert response.headers["Expires"] == "90"
 
 
 def test_registration_store_restores_unexpired_registration(tmp_path: Path) -> None:
