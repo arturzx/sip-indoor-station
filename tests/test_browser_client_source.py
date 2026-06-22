@@ -44,6 +44,13 @@ def test_browser_client_uses_relative_urls_for_ingress() -> None:
     assert "${location.host}/webrtc/ws" not in client_source
 
 
+def test_browser_debug_page_points_users_to_home_assistant_integration() -> None:
+    html_source = Path("src/sip_indoor_station/web/static/index.html").read_text()
+    assert "only for debugging and development" in html_source
+    assert "SIP Indoor Station Integration" in html_source
+    assert "https://github.com/arturzx/sip-indoor-station-integration" in html_source
+
+
 def test_browser_client_uses_websocket_ice_candidates_only() -> None:
     source = Path("src/sip_indoor_station/web/static/client.js").read_text()
     assert "addConfiguredIceCandidates" not in source
