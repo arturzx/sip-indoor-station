@@ -356,7 +356,7 @@ async def collect_event(events: list[AppEvent], event: AppEvent) -> None:
 
 
 def state_api_with_broadcasts(event_bus: EventBus, server: SipServer) -> tuple[StateApi, list[dict]]:
-    api = StateApi(event_bus, server)
+    api = StateApi(event_bus, server, Config())
     broadcasts: list[dict] = []
 
     async def collect(payload: dict) -> None:

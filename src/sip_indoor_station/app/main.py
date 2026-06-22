@@ -81,7 +81,7 @@ async def main() -> None:
             if config.call_history_enabled
             else None
         )
-    state_api = StateApi(event_bus, sip_server, call_history)
+    state_api = StateApi(event_bus, sip_server, config, call_history)
     for registration in sip_server.registrations.active():
         await event_bus.publish(
             AppEvent(

@@ -67,7 +67,7 @@ class FakeController:
 
 
 def make_server(config: Config, event_bus: EventBus, media_provider):
-    return AppHttpServer(config, event_bus, media_provider, StateApi(event_bus, FakeController()))
+    return AppHttpServer(config, event_bus, media_provider, StateApi(event_bus, FakeController(), config))
 
 
 def test_webrtc_signaling_rejects_offer_when_no_active_call() -> None:
@@ -131,7 +131,7 @@ def test_webrtc_signaling_builds_browser_ice_servers_from_lists() -> None:
         ),
         event_bus,
         lambda: None,
-        StateApi(event_bus, FakeController()),
+        StateApi(event_bus, FakeController(), Config()),
     )
     assert server.browser_ice_servers() == [
         {"urls": "stun:stun1.example.com:3478"},

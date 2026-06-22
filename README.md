@@ -95,14 +95,22 @@ State endpoint:
 GET /api/state
 ```
 
-The response includes `version`, `registered`, `ringing`, `in_call`, `call_state`, registration data, selected codec data, and last event metadata.
+The state response includes `version`, `registered`, `ringing`, `in_call`, `call_state`, registration data, selected codec data, and last event metadata.
+
+Config endpoint:
+
+```text
+GET /api/config
+```
+
+The response includes `api_enabled`, `door_station_vendor`, and `relays_count`.
 
 Command endpoints:
 
 - `POST /api/answer`
 - `POST /api/reject`
 - `POST /api/hangup`
-- `POST /api/open_door`
+- `POST /api/open_door` (default relay `1`, use JSON body for another relay: `{"relay":2}`)
 - `POST /api/reboot`
 
 ### Optional Call History

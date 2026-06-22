@@ -7,6 +7,7 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from sip_indoor_station.app.events import AppEvent, EventBus
+from sip_indoor_station.app.config import Config
 from sip_indoor_station.app.state import (
     AppState,
     apply_event_to_state,
@@ -25,10 +26,12 @@ class StateApi:
         self,
         event_bus: EventBus,
         call_controller: CallController,
+        config: Config,
         call_history: CallHistoryStore | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.call_controller = call_controller
+        self.config = config
         self.call_history = call_history
         self.state = AppState()
         self._websockets: set[web.WebSocketResponse] = set()
@@ -36,6 +39,7 @@ class StateApi:
 
     def register_routes(self, app: web.Application) -> None:
         app.router.add_get("/api/state", self.get_state)
+        app.router.add_get("/api/config", self.get_config)
         app.router.add_post("/api/answer", self.answer)
         app.router.add_post("/api/reject", self.reject)
         app.router.add_post("/api/hangup", self.hangup)
@@ -55,6 +59,15 @@ class StateApi:
     async def get_state(self, _request: web.Request) -> web.Response:
         return web.json_response(self.state.to_dict())
 
+    async def get_config(self, _request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "door_station_vendor": self.config.door_station_vendor,
+                "api_enabled": self.config.api_enabled,
+                "relays_count": self.config.relays_count,
+            }
+        )
+
     async def answer(self, _request: web.Request) -> web.Response:
         return await self._run_call_command("answer", self.call_controller.answer_current_call, required_state="ringing")
 
@@ -65,7 +78,7 @@ class StateApi:
         return await self._run_call_command("hangup", self.call_controller.hangup_current_call, required_state="answered")
 
     async def open_door(self, _request: web.Request | None) -> web.Response:
-        relay = self._parse_relay(_request)
+        relay = await self._parse_relay(_request)
         if relay is None:
             await self.publish_command_rejected("open_door", "invalid_relay")
             return web.json_response({"ok": False, "reason": "invalid_relay"}, status=400)
@@ -74,16 +87,24 @@ class StateApi:
     async def reboot(self, _request: web.Request) -> web.Response:
         return await self._run_call_command("reboot", self.call_controller.reboot)
 
-    @staticmethod
-    def _parse_relay(request: web.Request | None) -> int | None:
+    async def _parse_relay(self, request: web.Request | None) -> int | None:
         if request is None:
             return 1
-        relay = request.query.get("relay", "1")
-        try:
-            value = int(relay)
-        except ValueError:
+
+        relay: object = 1
+        body = await request.text()
+        if body.strip():
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(payload, dict):
+                return None
+            relay = payload.get("relay", 1)
+
+        if type(relay) is not int:
             return None
-        return value if value >= 1 else None
+        return relay if relay >= 1 else None
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=30.0)
