@@ -16,6 +16,18 @@ const codecEl = document.getElementById("codec");
 const lastEventEl = document.getElementById("lastEvent");
 const logEl = document.getElementById("log");
 const remoteAudio = document.getElementById("remoteAudio");
+const scriptUrl = document.currentScript ? document.currentScript.src : window.location.href;
+const baseUrl = new URL(".", scriptUrl);
+
+function httpUrl(path) {
+  return new URL(path.replace(/^\/+/, ""), baseUrl).toString();
+}
+
+function websocketUrl(path) {
+  const url = new URL(httpUrl(path));
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
 
 function log(message) {
   logEl.textContent += `${new Date().toISOString()} ${message}\n`;
@@ -44,7 +56,7 @@ function updateApiState(state) {
 }
 
 async function loadApiState() {
-  const response = await fetch("/api/state", { cache: "no-store" });
+  const response = await fetch(httpUrl("api/state"), { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`state failed: ${response.status}`);
   }
@@ -56,7 +68,7 @@ async function loadApiState() {
 function connectApi() {
   if (apiWs) return;
   apiStatusEl.textContent = "Connecting";
-  apiWs = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
+  apiWs = new WebSocket(websocketUrl("api/ws"));
   apiWs.onopen = () => {
     apiStatusEl.textContent = "Connected";
     log("api websocket open");
@@ -81,7 +93,7 @@ function connectApi() {
 }
 
 async function postCommand(path) {
-  const response = await fetch(path, { method: "POST" });
+  const response = await fetch(httpUrl(path), { method: "POST" });
   let payload = null;
   try {
     payload = await response.json();
@@ -119,7 +131,7 @@ async function connect() {
   if (ws || pc) return;
   statusEl.textContent = "Connecting";
   const webrtcConfig = await loadWebRtcConfig();
-  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/webrtc/ws`);
+  ws = new WebSocket(websocketUrl("webrtc/ws"));
   pc = new RTCPeerConnection({
     iceServers: webrtcConfig.iceServers,
     iceTransportPolicy: webrtcConfig.iceTransportPolicy,
@@ -199,7 +211,7 @@ async function connect() {
 }
 
 async function loadWebRtcConfig() {
-  const response = await fetch("/webrtc/config", { cache: "no-store" });
+  const response = await fetch(httpUrl("webrtc/config"), { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`WebRTC config failed: ${response.status}`);
   }
@@ -241,11 +253,11 @@ function playAudio() {
 document.getElementById("connect").addEventListener("click", () => connect().catch(error => log(error.message)));
 document.getElementById("playAudio").addEventListener("click", playAudio);
 document.getElementById("disconnect").addEventListener("click", disconnect);
-document.getElementById("answer").addEventListener("click", () => postCommand("/api/answer").catch(error => log(error.message)));
-document.getElementById("reject").addEventListener("click", () => postCommand("/api/reject").catch(error => log(error.message)));
-document.getElementById("hangup").addEventListener("click", () => postCommand("/api/hangup").catch(error => log(error.message)));
-document.getElementById("openDoor").addEventListener("click", () => postCommand("/api/open_door").catch(error => log(error.message)));
-document.getElementById("reboot").addEventListener("click", () => postCommand("/api/reboot").catch(error => log(error.message)));
+document.getElementById("answer").addEventListener("click", () => postCommand("api/answer").catch(error => log(error.message)));
+document.getElementById("reject").addEventListener("click", () => postCommand("api/reject").catch(error => log(error.message)));
+document.getElementById("hangup").addEventListener("click", () => postCommand("api/hangup").catch(error => log(error.message)));
+document.getElementById("openDoor").addEventListener("click", () => postCommand("api/open_door").catch(error => log(error.message)));
+document.getElementById("reboot").addEventListener("click", () => postCommand("api/reboot").catch(error => log(error.message)));
 
 loadApiState().catch(error => log(error.message));
 connectApi();

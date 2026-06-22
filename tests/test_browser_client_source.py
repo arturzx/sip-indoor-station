@@ -23,10 +23,25 @@ def test_browser_client_sets_websocket_open_handler_before_media_await() -> None
 
 def test_browser_client_loads_webrtc_ice_config_before_peer_connection() -> None:
     source = Path("src/sip_indoor_station/web/static/client.js").read_text()
-    assert 'fetch("/webrtc/config"' in source
+    assert 'fetch(httpUrl("webrtc/config")' in source
     assert "new RTCPeerConnection({" in source
     assert "iceServers: webrtcConfig.iceServers" in source
     assert source.index("await loadWebRtcConfig()") < source.index("new RTCPeerConnection({")
+
+
+def test_browser_client_uses_relative_urls_for_ingress() -> None:
+    client_source = Path("src/sip_indoor_station/web/static/client.js").read_text()
+    html_source = Path("src/sip_indoor_station/web/static/index.html").read_text()
+    assert 'src="client.js"' in html_source
+    assert 'src="/client.js"' not in html_source
+    assert 'fetch(httpUrl("api/state")' in client_source
+    assert 'new WebSocket(websocketUrl("api/ws"))' in client_source
+    assert 'new WebSocket(websocketUrl("webrtc/ws"))' in client_source
+    assert 'postCommand("api/open_door")' in client_source
+    assert 'fetch("/api/state"' not in client_source
+    assert 'fetch("/webrtc/config"' not in client_source
+    assert "${location.host}/api/ws" not in client_source
+    assert "${location.host}/webrtc/ws" not in client_source
 
 
 def test_browser_client_uses_websocket_ice_candidates_only() -> None:
