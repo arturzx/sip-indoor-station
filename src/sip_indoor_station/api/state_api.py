@@ -64,11 +64,26 @@ class StateApi:
     async def hangup(self, _request: web.Request) -> web.Response:
         return await self._run_call_command("hangup", self.call_controller.hangup_current_call, required_state="answered")
 
-    async def open_door(self, _request: web.Request) -> web.Response:
-        return await self._run_call_command("open_door", self.call_controller.open_door)
+    async def open_door(self, _request: web.Request | None) -> web.Response:
+        relay = self._parse_relay(_request)
+        if relay is None:
+            await self.publish_command_rejected("open_door", "invalid_relay")
+            return web.json_response({"ok": False, "reason": "invalid_relay"}, status=400)
+        return await self._run_call_command("open_door", lambda: self.call_controller.open_door(relay=relay))
 
     async def reboot(self, _request: web.Request) -> web.Response:
         return await self._run_call_command("reboot", self.call_controller.reboot)
+
+    @staticmethod
+    def _parse_relay(request: web.Request | None) -> int | None:
+        if request is None:
+            return 1
+        relay = request.query.get("relay", "1")
+        try:
+            value = int(relay)
+        except ValueError:
+            return None
+        return value if value >= 1 else None
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=30.0)

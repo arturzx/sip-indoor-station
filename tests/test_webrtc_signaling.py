@@ -59,7 +59,7 @@ class FakeController:
     async def hangup_current_call(self) -> bool:
         return True
 
-    async def open_door(self) -> bool:
+    async def open_door(self, relay: int = 1) -> bool:
         return True
 
     async def reboot(self) -> bool:

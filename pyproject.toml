@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sip-indoor-station"
-version = "0.1.4"
+version = "0.1.5"
 description = "Simple SIP/WebRTC bridge for home door stations without PBX overhead"
 readme = "README.md"
 requires-python = ">=3.11"

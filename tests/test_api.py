@@ -12,6 +12,10 @@ from sip_indoor_station.vendor.hikvision.errors import IsapiAuthError, IsapiConn
 from sip_indoor_station.vendor.hikvision.maintenance import HikvisionMaintenanceApi
 from sip_indoor_station.vendor.hikvision.models import IsapiBinaryResponse, IsapiClientConfig, IsapiResponse
 from sip_indoor_station.vendor.hikvision.snapshot import HikvisionSnapshotProvider
+from sip_indoor_station.vendor.dahua.client import DahuaApiClient
+from sip_indoor_station.vendor.dahua.door import DahuaDoorApi
+from sip_indoor_station.vendor.dahua.models import DahuaSnapshotResponse, DahuaApiClientConfig
+from sip_indoor_station.vendor.dahua.snapshot import DahuaSnapshotProvider
 from sip_indoor_station.sip.server import SipServer
 
 
@@ -45,6 +49,20 @@ class FakeSnapshotClient:
         return IsapiBinaryResponse(200, b"snapshot", "image/jpeg")
 
 
+class FakeDahuaClient:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, dict[str, object] | None]] = []
+        self.get_snapshot_calls: list[int] = []
+
+    async def get(self, path: str, *, params: dict[str, object] | None = None, expect_json: bool = False) -> object:
+        self.requests.append((path, params))
+        return IsapiResponse(200, "OK")
+
+    async def get_snapshot(self, channel: int = 1) -> DahuaSnapshotResponse:
+        self.get_snapshot_calls.append(channel)
+        return DahuaSnapshotResponse(200, b"snapshot")
+
+
 def test_isapi_client_builds_http_base_url() -> None:
     client = HikvisionIsapiClient(IsapiClientConfig(host="192.168.8.163", port=80))
     assert client.base_url == "http://192.168.8.163:80"
@@ -70,6 +88,16 @@ def test_open_door_sends_expected_put_and_xml_body() -> None:
     asyncio.run(run())
 
 
+def test_open_door_uses_relay_index() -> None:
+    async def run() -> None:
+        client = FakeDoorClient()
+        door = HikvisionDoorApi(client, relays_count=4)  # type: ignore[arg-type]
+        assert await door.open_door(relay=3) is True
+        assert client.requests[-1][1] == "/ISAPI/AccessControl/RemoteControl/door/3"
+
+    asyncio.run(run())
+
+
 def test_snapshot_provider_reads_hikvision_picture_endpoint() -> None:
     async def run() -> None:
         client = FakeSnapshotClient()
@@ -83,6 +111,35 @@ def test_snapshot_provider_reads_hikvision_picture_endpoint() -> None:
         assert client.requests == ["/ISAPI/Streaming/channels/101/picture"]
 
     asyncio.run(run())
+
+
+def test_dahua_door_api_uses_channel_relay() -> None:
+    async def run() -> None:
+        client = FakeDahuaClient()
+        door = DahuaDoorApi(client, relays_count=2)  # type: ignore[arg-type]
+        assert await door.open_door(relay=2) is True
+        assert client.requests[-1] == ("/cgi-bin/accessControl.cgi", {"action": "openDoor", "channel": 2})
+
+    asyncio.run(run())
+
+
+def test_dahua_snapshot_provider_reads_dahua_snapshot_endpoint() -> None:
+    async def run() -> None:
+        client = FakeDahuaClient()
+        provider = DahuaSnapshotProvider(client)  # type: ignore[arg-type]
+        snapshot = await provider.capture_snapshot()
+        assert snapshot is not None
+        assert snapshot.content == b"snapshot"
+        assert snapshot.content_type == "image/jpeg"
+        assert client.get_snapshot_calls == [1]
+
+    asyncio.run(run())
+
+
+def test_dahua_api_builds_http_base_url() -> None:
+    client = DahuaApiClient(DahuaApiClientConfig(host="dahua.local", port=80))
+    assert client.base_url == "http://dahua.local:80"
+
 
 
 def test_get_call_status_parses_idle_ring_and_on_call() -> None:
@@ -180,10 +237,10 @@ def test_sip_server_open_door_rejected_when_isapi_disabled() -> None:
         events: list[AppEvent] = []
         event_bus = EventBus()
         event_bus.subscribe(lambda event: collect_event(events, event))
-        server = SipServer(Config(isapi_enabled=False), event_bus=event_bus)
+        server = SipServer(Config(api_enabled=False), event_bus=event_bus)
         assert await server.open_door() is False
         assert events[-1].name == "command_rejected"
-        assert events[-1].data == {"command": "open_door", "reason": "isapi_disabled"}
+        assert events[-1].data == {"command": "open_door", "reason": "api_disabled"}
 
     asyncio.run(run())
 
@@ -191,13 +248,13 @@ def test_sip_server_open_door_rejected_when_isapi_disabled() -> None:
 def test_api_open_door_broadcasts_success_event_when_isapi_enabled() -> None:
     async def run() -> None:
         event_bus = EventBus()
-        server = SipServer(Config(isapi_enabled=True), event_bus=event_bus, door_opener=SuccessfulDoorOpener())
+        server = SipServer(Config(api_enabled=True), event_bus=event_bus, door_opener=SuccessfulDoorOpener())
         api, broadcasts = state_api_with_broadcasts(event_bus, server)
         response = await api.open_door(None)  # type: ignore[arg-type]
         assert response.status == 200
         payload = broadcasts[-1]
         assert payload["event"] == "door_open_command_sent"
-        assert payload["data"] == {"source": "isapi"}
+        assert payload["data"] == {"source": "api"}
 
     asyncio.run(run())
 
@@ -205,14 +262,14 @@ def test_api_open_door_broadcasts_success_event_when_isapi_enabled() -> None:
 def test_api_open_door_rejected_when_isapi_disabled() -> None:
     async def run() -> None:
         event_bus = EventBus()
-        server = SipServer(Config(isapi_enabled=False), event_bus=event_bus)
+        server = SipServer(Config(api_enabled=False), event_bus=event_bus)
         api, broadcasts = state_api_with_broadcasts(event_bus, server)
         response = await api.open_door(None)  # type: ignore[arg-type]
         assert response.status == 409
         payload = broadcasts[-1]
         assert payload["event"] == "command_rejected"
         assert payload["command"] == "open_door"
-        assert payload["reason"] == "isapi_disabled"
+        assert payload["reason"] == "api_disabled"
 
     asyncio.run(run())
 
@@ -220,13 +277,13 @@ def test_api_open_door_rejected_when_isapi_disabled() -> None:
 def test_api_open_door_broadcasts_failure_event_when_isapi_fails() -> None:
     async def run() -> None:
         event_bus = EventBus()
-        server = SipServer(Config(isapi_enabled=True), event_bus=event_bus, door_opener=FailingDoorOpener())
+        server = SipServer(Config(api_enabled=True), event_bus=event_bus, door_opener=FailingDoorOpener())
         api, broadcasts = state_api_with_broadcasts(event_bus, server)
         response = await api.open_door(None)  # type: ignore[arg-type]
         assert response.status == 409
         payload = broadcasts[-1]
         assert payload["event"] == "open_door_failed"
-        assert payload["data"]["source"] == "isapi"
+        assert payload["data"]["source"] == "api"
         assert payload["data"]["reason"]
 
     asyncio.run(run())
@@ -237,10 +294,10 @@ def test_sip_server_reboot_rejected_when_isapi_disabled() -> None:
         events: list[AppEvent] = []
         event_bus = EventBus()
         event_bus.subscribe(lambda event: collect_event(events, event))
-        server = SipServer(Config(isapi_enabled=False), event_bus=event_bus)
+        server = SipServer(Config(api_enabled=False), event_bus=event_bus)
         assert await server.reboot() is False
         assert events[-1].name == "command_rejected"
-        assert events[-1].data == {"command": "reboot", "reason": "isapi_disabled"}
+        assert events[-1].data == {"command": "reboot", "reason": "api_disabled"}
 
     asyncio.run(run())
 
@@ -248,13 +305,13 @@ def test_sip_server_reboot_rejected_when_isapi_disabled() -> None:
 def test_api_reboot_broadcasts_success_event_when_isapi_enabled() -> None:
     async def run() -> None:
         event_bus = EventBus()
-        server = SipServer(Config(isapi_enabled=True), event_bus=event_bus, maintenance=SuccessfulMaintenance())
+        server = SipServer(Config(api_enabled=True), event_bus=event_bus, maintenance=SuccessfulMaintenance())
         api, broadcasts = state_api_with_broadcasts(event_bus, server)
         response = await api.reboot(None)  # type: ignore[arg-type]
         assert response.status == 200
         payload = broadcasts[-1]
         assert payload["event"] == "reboot_command_sent"
-        assert payload["data"] == {"source": "isapi"}
+        assert payload["data"] == {"source": "api"}
 
     asyncio.run(run())
 
@@ -262,25 +319,25 @@ def test_api_reboot_broadcasts_success_event_when_isapi_enabled() -> None:
 def test_api_reboot_broadcasts_failure_event_when_isapi_fails() -> None:
     async def run() -> None:
         event_bus = EventBus()
-        server = SipServer(Config(isapi_enabled=True), event_bus=event_bus, maintenance=FailingMaintenance())
+        server = SipServer(Config(api_enabled=True), event_bus=event_bus, maintenance=FailingMaintenance())
         api, broadcasts = state_api_with_broadcasts(event_bus, server)
         response = await api.reboot(None)  # type: ignore[arg-type]
         assert response.status == 409
         payload = broadcasts[-1]
         assert payload["event"] == "reboot_failed"
-        assert payload["data"]["source"] == "isapi"
+        assert payload["data"]["source"] == "api"
         assert payload["data"]["reason"]
 
     asyncio.run(run())
 
 
 class SuccessfulDoorOpener:
-    async def open_door(self) -> bool:
+    async def open_door(self, relay: int = 1) -> bool:
         return True
 
 
 class FailingDoorOpener:
-    async def open_door(self) -> bool:
+    async def open_door(self, relay: int = 1) -> bool:
         return False
 
 

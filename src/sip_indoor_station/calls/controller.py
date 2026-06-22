@@ -13,7 +13,7 @@ class CallController(Protocol):
     async def hangup_current_call(self) -> bool:
         raise NotImplementedError
 
-    async def open_door(self) -> bool:
+    async def open_door(self, relay: int = 1) -> bool:
         raise NotImplementedError
 
     async def reboot(self) -> bool:

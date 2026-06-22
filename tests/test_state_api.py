@@ -24,13 +24,18 @@ class FakeController:
         self.calls.append("hangup")
         return True
 
-    async def open_door(self) -> bool:
-        self.calls.append("open_door")
+    async def open_door(self, relay: int = 1) -> bool:
+        self.calls.append(f"open_door:{relay}")
         return True
 
     async def reboot(self) -> bool:
         self.calls.append("reboot")
         return True
+
+
+class FakeRequest:
+    def __init__(self, relay: str) -> None:
+        self.query = {"relay": relay}
 
 
 def test_state_api_tracks_events_and_broadcasts_state() -> None:
@@ -98,7 +103,33 @@ def test_open_door_and_reboot_call_controller_without_call_state_requirement() -
         api, _broadcasts = state_api_with_broadcasts(EventBus(), controller)
         assert (await api.open_door(None)).status == 200  # type: ignore[arg-type]
         assert (await api.reboot(None)).status == 200  # type: ignore[arg-type]
-        assert controller.calls == ["open_door", "reboot"]
+        assert controller.calls == ["open_door:1", "reboot"]
+
+    asyncio.run(run())
+
+
+def test_open_door_accepts_relay_query_param() -> None:
+    async def run() -> None:
+        controller = FakeController()
+        api, _broadcasts = state_api_with_broadcasts(EventBus(), controller)
+        response = await api.open_door(FakeRequest("2"))  # type: ignore[arg-type]
+        assert response.status == 200
+        assert controller.calls == ["open_door:2"]
+
+    asyncio.run(run())
+
+
+def test_open_door_rejects_invalid_relay_query_param() -> None:
+    async def run() -> None:
+        controller = FakeController()
+        api, broadcasts = state_api_with_broadcasts(EventBus(), controller)
+        response = await api.open_door(FakeRequest("0"))  # type: ignore[arg-type]
+        payload = json.loads(response.text)
+        assert response.status == 400
+        assert payload == {"ok": False, "reason": "invalid_relay"}
+        assert controller.calls == []
+        assert broadcasts[-1]["type"] == "event"
+        assert broadcasts[-1]["event"] == "command_rejected"
 
     asyncio.run(run())
 

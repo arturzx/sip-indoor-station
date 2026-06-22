@@ -16,7 +16,7 @@ This project currently implements:
 - SDP parsing and a minimal PCMA/PCMU SDP answer with video rejection
 - GStreamer WebRTC audio bridge for PCMU/8000 / PCMA/8000 RTP audio
 
-It intentionally does not implement H264 video bridging, or a full RFC-complete SIP stack. Vendor-specific features should stay optional; HikVision ISAPI support is currently used only for optional door control and maintenance actions.
+It intentionally does not implement H264 video bridging, or a full RFC-complete SIP stack. Vendor-specific features should stay optional; HikVision and Dahua HTTP APIs are currently used for optional door control, snapshots, and maintenance actions.
 
 ## Run
 
@@ -42,7 +42,16 @@ export RTP_PORT_MAX=40100
 export CALL_HISTORY_ENABLED=false
 export CALL_HISTORY_DAYS=30
 export CALL_HISTORY_DB_PATH=/data/call_history.sqlite
+export API_ENABLED=false
 export DOOR_STATION_VENDOR=
+export API_HOST=
+export API_PORT=80
+export API_USERNAME=admin
+export API_PASSWORD=change-me
+export API_USE_HTTPS=false
+export API_TIMEOUT_SECONDS=5
+export API_VERIFY_SSL=false
+export RELAYS_COUNT=1
 sip-indoor-station
 ```
 
@@ -119,20 +128,46 @@ Stored statuses:
 
 Retention cleanup removes entries older than `CALL_HISTORY_DAYS`.
 
-Snapshots are stored in the same SQLite database as BLOB data when a snapshot provider is available. For HikVision snapshots, enable ISAPI and set:
+Snapshots are stored in the same SQLite database as BLOB data when a snapshot provider is available. For HikVision snapshots, set:
 
 ```bash
 export DOOR_STATION_VENDOR=hikvision
-export ISAPI_ENABLED=true
-export ISAPI_HOST=192.168.0.234
-export ISAPI_USERNAME=admin
-export ISAPI_PASSWORD=change-me
+export API_ENABLED=true
+export API_HOST=192.168.0.234
+export API_PORT=80
+export API_USERNAME=admin
+export API_PASSWORD=change-me
+export API_USE_HTTPS=false
+export API_TIMEOUT_SECONDS=5
+export API_VERIFY_SSL=false
+export RELAYS_COUNT=1
 ```
 
 The HikVision snapshot provider reads:
 
 ```text
 GET /ISAPI/Streaming/channels/101/picture
+```
+
+For Dahua snapshots, use:
+
+```bash
+export DOOR_STATION_VENDOR=dahua
+export API_ENABLED=true
+export API_HOST=192.168.0.235
+export API_PORT=80
+export API_USERNAME=admin
+export API_PASSWORD=change-me
+export API_USE_HTTPS=false
+export API_TIMEOUT_SECONDS=5
+export API_VERIFY_SSL=false
+export RELAYS_COUNT=1
+```
+
+The Dahua snapshot provider reads:
+
+```text
+GET /cgi-bin/snapshot.cgi?channel=1
 ```
 
 Call history endpoints:
@@ -177,30 +212,32 @@ The WebSocket sends the current state immediately after connection:
 {"type":"state","state":{"registered":false,"ringing":false,"in_call":false,"call_state":"idle"}}
 ```
 
-It then sends `state` messages and `event` messages after internal SIP/ISAPI events. WebRTC media signaling remains separate on `/webrtc/ws`.
+It then sends `state` messages and `event` messages after internal SIP/API events. WebRTC media signaling remains separate on `/webrtc/ws`.
 
-### Optional HikVision ISAPI
+### Optional Vendor API
 
-ISAPI is disabled by default and is vendor-specific. When enabled, `POST /api/open_door` calls the HikVision ISAPI remote door-control endpoint. Local ISAPI access must be enabled on the HikVision device.
+Vendor APIs are disabled by default. When enabled, `POST /api/open_door` calls the selected vendor door control endpoint.
 
 Configure the door station HTTP API credentials:
 
 ```bash
-export ISAPI_ENABLED=true
-export ISAPI_HOST=192.168.0.234
-export ISAPI_PORT=80
-export ISAPI_USERNAME=admin
-export ISAPI_PASSWORD=change-me
-export ISAPI_USE_HTTPS=false
-export ISAPI_TIMEOUT_SECONDS=5
-export ISAPI_VERIFY_SSL=false
-export ISAPI_DOOR_ID=1
+export API_ENABLED=true
+export DOOR_STATION_VENDOR=hikvision
+export API_HOST=192.168.0.234
+export API_PORT=80
+export API_USERNAME=admin
+export API_PASSWORD=change-me
+export API_USE_HTTPS=false
+export API_TIMEOUT_SECONDS=5
+export API_VERIFY_SSL=false
 ```
 
-The request sent is:
+Relay count defaults to one relay and can be changed with `RELAYS_COUNT`.
+
+For HikVision, the door request is:
 
 ```text
-PUT /ISAPI/AccessControl/RemoteControl/door/1
+PUT /ISAPI/AccessControl/RemoteControl/door/<relay>
 Content-Type: application/xml
 ```
 
@@ -210,7 +247,13 @@ with:
 <?xml version="1.0" encoding="UTF-8"?><RemoteControlDoor><cmd>open</cmd></RemoteControlDoor>
 ```
 
-SIP remains responsible for call handling. ISAPI is currently used for door control plus optional status and fallback call-signal helpers.
+For Dahua, the door request is sent to:
+
+```text
+GET /cgi-bin/accessControl.cgi?action=openDoor&channel=<relay>
+```
+
+SIP remains responsible for call handling. Vendor API is currently used for door control plus optional status/fallback helpers.
 
 ## WebRTC Audio Bridge
 

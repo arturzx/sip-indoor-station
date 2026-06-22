@@ -38,6 +38,10 @@ class CallHistoryEntry:
     snapshot_content_type: str | None
     snapshot_captured_at: str | None
 
+    @property
+    def snapshot_url(self) -> str | None:
+        return f"/api/call_history/{self.id}/snapshot" if self.has_snapshot else None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -50,7 +54,7 @@ class CallHistoryEntry:
             "has_snapshot": self.has_snapshot,
             "snapshot_content_type": self.snapshot_content_type,
             "snapshot_captured_at": self.snapshot_captured_at,
-            "snapshot_url": f"/api/call_history/{self.id}/snapshot" if self.has_snapshot else None,
+            "snapshot_url": self.snapshot_url,
         }
 
 

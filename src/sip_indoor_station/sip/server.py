@@ -46,7 +46,7 @@ class SnapshotProvider(Protocol):
 
 
 class DoorOpener(Protocol):
-    async def open_door(self) -> bool:
+    async def open_door(self, relay: int = 1) -> bool:
         raise NotImplementedError
 
 
@@ -392,46 +392,46 @@ class SipServer:
         await self.event_bus.publish(AppEvent("call_ended", call_id=session.call_id))
         return True
 
-    async def open_door(self) -> bool:
+    async def open_door(self, relay: int = 1) -> bool:
         if self.door_opener is None:
-            reason = "isapi_disabled" if not self.config.isapi_enabled else "isapi_not_configured"
+            reason = "api_disabled" if not self.config.api_enabled else "api_not_configured"
             LOGGER.info("open_door_ignored reason=%s", reason)
             await self.publish_command_rejected("open_door", reason)
             return False
         try:
             if hasattr(self.door_opener, "open_door_result"):
-                result = await self.door_opener.open_door_result()  # type: ignore[attr-defined]
+                result = await self.door_opener.open_door_result(relay=relay)  # type: ignore[attr-defined]
                 if result.success:
-                    await self.event_bus.publish(AppEvent("door_open_command_sent", data={"source": "isapi"}))
+                    await self.event_bus.publish(AppEvent("door_open_command_sent", data={"source": "api"}))
                     return True
-                reason = result.message or "ISAPI open door command failed"
-                await self.event_bus.publish(AppEvent("open_door_failed", data={"source": "isapi", "reason": reason}))
+                reason = result.message or "API open door command failed"
+                await self.event_bus.publish(AppEvent("open_door_failed", data={"source": "api", "reason": reason}))
                 return False
-            if await self.door_opener.open_door():
-                await self.event_bus.publish(AppEvent("door_open_command_sent", data={"source": "isapi"}))
+            if await self.door_opener.open_door(relay):
+                await self.event_bus.publish(AppEvent("door_open_command_sent", data={"source": "api"}))
                 return True
-            reason = "ISAPI open door command failed"
+            reason = "API open door command failed"
         except Exception as exc:
             LOGGER.warning("open_door_failed error=%s", exc)
             reason = str(exc)
-        await self.event_bus.publish(AppEvent("open_door_failed", data={"source": "isapi", "reason": reason}))
+        await self.event_bus.publish(AppEvent("open_door_failed", data={"source": "api", "reason": reason}))
         return False
 
     async def reboot(self) -> bool:
         if self.maintenance is None:
-            reason = "isapi_disabled" if not self.config.isapi_enabled else "isapi_not_configured"
+            reason = "api_disabled" if not self.config.api_enabled else "api_not_configured"
             LOGGER.info("reboot_ignored reason=%s", reason)
             await self.publish_command_rejected("reboot", reason)
             return False
         try:
             if await self.maintenance.reboot():
-                await self.event_bus.publish(AppEvent("reboot_command_sent", data={"source": "isapi"}))
+                await self.event_bus.publish(AppEvent("reboot_command_sent", data={"source": "api"}))
                 return True
-            reason = "ISAPI reboot command failed"
+            reason = "API reboot command failed"
         except Exception as exc:
             LOGGER.warning("reboot_failed error=%s", exc)
             reason = str(exc)
-        await self.event_bus.publish(AppEvent("reboot_failed", data={"source": "isapi", "reason": reason}))
+        await self.event_bus.publish(AppEvent("reboot_failed", data={"source": "api", "reason": reason}))
         return False
 
     async def publish_command_rejected(self, command: str, reason: str) -> None:

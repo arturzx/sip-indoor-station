@@ -11,6 +11,10 @@ from sip_indoor_station.calls.history import CallHistoryStore
 from sip_indoor_station.sip.server import SipServer
 
 
+def _normalize_vendor(value: str | None) -> str:
+    return (value or "").strip().lower()
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.DEBUG,
@@ -22,27 +26,54 @@ async def main() -> None:
     call_history = None
     door_opener = None
     maintenance = None
-    if config.door_station_vendor == "hikvision" and config.isapi_enabled and config.isapi_host:
-        from sip_indoor_station.vendor.hikvision.client import HikvisionIsapiClient
-        from sip_indoor_station.vendor.hikvision.snapshot import HikvisionSnapshotProvider
-        from sip_indoor_station.vendor.hikvision.door import HikvisionDoorApi
-        from sip_indoor_station.vendor.hikvision.maintenance import HikvisionMaintenanceApi
-        from sip_indoor_station.vendor.hikvision.models import IsapiClientConfig
+    if config.api_enabled:
+        vendor = _normalize_vendor(config.door_station_vendor)
+        if not vendor:
+            raise ValueError("API is enabled but DOOR_STATION_VENDOR is required")
+        if not config.api_host:
+            raise ValueError(f"API is enabled but API_HOST is required for vendor={vendor}")
+        if vendor == "hikvision":
+            from sip_indoor_station.vendor.hikvision.client import HikvisionIsapiClient
+            from sip_indoor_station.vendor.hikvision.door import HikvisionDoorApi
+            from sip_indoor_station.vendor.hikvision.maintenance import HikvisionMaintenanceApi
+            from sip_indoor_station.vendor.hikvision.snapshot import HikvisionSnapshotProvider
+            from sip_indoor_station.vendor.hikvision.models import IsapiClientConfig
 
-        isapi_client = HikvisionIsapiClient(
-            IsapiClientConfig(
-                host=config.isapi_host,
-                port=config.isapi_port,
-                username=config.isapi_username,
-                password=config.isapi_password,
-                use_https=config.isapi_use_https,
-                timeout_seconds=config.isapi_timeout_seconds,
-                verify_ssl=config.isapi_verify_ssl,
+            api_client = HikvisionIsapiClient(
+                IsapiClientConfig(
+                    host=config.api_host,
+                    port=config.api_port,
+                    username=config.api_username,
+                    password=config.api_password,
+                    use_https=config.api_use_https,
+                    timeout_seconds=config.api_timeout_seconds,
+                    verify_ssl=config.api_verify_ssl,
+                )
             )
-        )
-        snapshot_provider = HikvisionSnapshotProvider(isapi_client)
-        door_opener = HikvisionDoorApi(isapi_client, door_id=config.isapi_door_id)
-        maintenance = HikvisionMaintenanceApi(isapi_client)
+            snapshot_provider = HikvisionSnapshotProvider(api_client)
+            door_opener = HikvisionDoorApi(api_client, relays_count=config.relays_count)
+            maintenance = HikvisionMaintenanceApi(api_client)
+        elif vendor == "dahua":
+            from sip_indoor_station.vendor.dahua.client import DahuaApiClient
+            from sip_indoor_station.vendor.dahua.door import DahuaDoorApi
+            from sip_indoor_station.vendor.dahua.models import DahuaApiClientConfig
+            from sip_indoor_station.vendor.dahua.snapshot import DahuaSnapshotProvider
+
+            api_client = DahuaApiClient(
+                DahuaApiClientConfig(
+                    host=config.api_host,
+                    port=config.api_port,
+                    username=config.api_username,
+                    password=config.api_password,
+                    use_https=config.api_use_https,
+                    timeout_seconds=config.api_timeout_seconds,
+                    verify_ssl=config.api_verify_ssl,
+                )
+            )
+            snapshot_provider = DahuaSnapshotProvider(api_client)
+            door_opener = DahuaDoorApi(api_client, relays_count=config.relays_count)
+        else:
+            raise ValueError(f"Unsupported DOOR_STATION_VENDOR={vendor}")
     sip_server = SipServer(config, event_bus=event_bus, door_opener=door_opener, maintenance=maintenance)
     if config.call_history_enabled:
         call_history = (
