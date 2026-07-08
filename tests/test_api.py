@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from xml.etree import ElementTree
 
 from sip_indoor_station.api.state_api import StateApi
 from sip_indoor_station.app.config import Config
@@ -22,7 +23,7 @@ from sip_indoor_station.vendor.dnake.models import DnakeApiClientConfig
 from sip_indoor_station.vendor.dnake.snapshot import DnakeSnapshotProvider
 from sip_indoor_station.vendor.onvif.errors import OnvifConnectionError
 from sip_indoor_station.vendor.onvif.models import OnvifClientConfig, OnvifSnapshotResponse
-from sip_indoor_station.vendor.onvif.snapshot import OnvifSnapshotProvider
+from sip_indoor_station.vendor.onvif.snapshot import LightweightOnvifClient, OnvifSnapshotProvider
 from sip_indoor_station.sip.server import SipServer
 
 
@@ -84,26 +85,35 @@ class FakeOnvifProfile:
     token = "profile-token"
 
 
-class FakeOnvifMediaService:
+class FakeOnvifClient:
     def __init__(self) -> None:
         self.snapshot_params: dict[str, object] | None = None
         self.snapshot_uri_calls = 0
 
-    def GetProfiles(self) -> list[FakeOnvifProfile]:
+    async def get_profiles(self) -> list[FakeOnvifProfile]:
         return [FakeOnvifProfile()]
 
-    def GetSnapshotUri(self, params: dict[str, object]) -> dict[str, str]:
+    async def get_snapshot_uri(self, profile_token: str) -> str:
         self.snapshot_uri_calls += 1
-        self.snapshot_params = params
-        return {"Uri": f"http://dnake.local/onvif/snapshot-{self.snapshot_uri_calls}.jpg"}
+        self.snapshot_params = {"ProfileToken": profile_token}
+        return f"http://dnake.local/onvif/snapshot-{self.snapshot_uri_calls}.jpg"
 
 
-class FakeOnvifCamera:
-    def __init__(self, media_service: FakeOnvifMediaService) -> None:
-        self.media_service = media_service
+class FakeSoapOnvifClient(LightweightOnvifClient):
+    def __init__(self, config: OnvifClientConfig, responses: list[ElementTree.Element]) -> None:
+        super().__init__(config)
+        self.responses = responses
+        self.requests: list[tuple[str, str, str, str]] = []
 
-    def create_media_service(self) -> FakeOnvifMediaService:
-        return self.media_service
+    async def soap_request(
+        self,
+        url: str,
+        operation: str,
+        action: str,
+        body: str,
+    ) -> ElementTree.Element:
+        self.requests.append((url, operation, action, body))
+        return self.responses.pop(0)
 
 
 def test_isapi_client_builds_http_base_url() -> None:
@@ -207,15 +217,95 @@ def test_dnake_api_builds_http_base_url() -> None:
     assert client.base_url == "http://dnake.local:80"
 
 
+def test_lightweight_onvif_client_reads_snapshot_uri_from_media_xaddr() -> None:
+    async def run() -> None:
+        client = FakeSoapOnvifClient(
+            OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
+            [
+                ElementTree.fromstring(
+                    """
+                    <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+                                xmlns:tds="http://www.onvif.org/ver10/device/wsdl"
+                                xmlns:tt="http://www.onvif.org/ver10/schema">
+                      <s:Body>
+                        <tds:GetCapabilitiesResponse>
+                          <tds:Capabilities>
+                            <tt:Media>
+                              <tt:XAddr>http://dnake.local/onvif/Media</tt:XAddr>
+                            </tt:Media>
+                          </tds:Capabilities>
+                        </tds:GetCapabilitiesResponse>
+                      </s:Body>
+                    </s:Envelope>
+                    """
+                ),
+                ElementTree.fromstring(
+                    """
+                    <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+                                xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+                      <s:Body>
+                        <trt:GetProfilesResponse>
+                          <trt:Profiles token="profile-token"/>
+                        </trt:GetProfilesResponse>
+                      </s:Body>
+                    </s:Envelope>
+                    """
+                ),
+                ElementTree.fromstring(
+                    """
+                    <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+                                xmlns:trt="http://www.onvif.org/ver10/media/wsdl"
+                                xmlns:tt="http://www.onvif.org/ver10/schema">
+                      <s:Body>
+                        <trt:GetSnapshotUriResponse>
+                          <trt:MediaUri>
+                            <tt:Uri>http://dnake.local/onvif/snapshot.jpg</tt:Uri>
+                          </trt:MediaUri>
+                        </trt:GetSnapshotUriResponse>
+                      </s:Body>
+                    </s:Envelope>
+                    """
+                ),
+            ],
+        )
+
+        assert await client.get_profiles() == [{"token": "profile-token"}]
+        assert await client.get_snapshot_uri("profile-token") == "http://dnake.local/onvif/snapshot.jpg"
+
+        assert [request[1] for request in client.requests] == [
+            "GetCapabilities",
+            "GetProfiles",
+            "GetSnapshotUri",
+        ]
+        assert [request[0] for request in client.requests] == [
+            "http://dnake.local:80/onvif/device_service",
+            "http://dnake.local/onvif/Media",
+            "http://dnake.local/onvif/Media",
+        ]
+        assert "<trt:ProfileToken>profile-token</trt:ProfileToken>" in client.requests[-1][3]
+
+    asyncio.run(run())
+
+
+def test_lightweight_onvif_client_wsse_header_uses_password_digest() -> None:
+    client = LightweightOnvifClient(OnvifClientConfig(host="dnake.local", username="admin", password="secret"))
+
+    envelope = client.soap_envelope("<trt:GetProfiles/>")
+
+    assert "<wsse:Username>admin</wsse:Username>" in envelope
+    assert "PasswordDigest" in envelope
+    assert "secret" not in envelope
+
+
 def test_onvif_snapshot_provider_reads_snapshot_uri_from_first_media_profile() -> None:
     async def run() -> None:
-        media_service = FakeOnvifMediaService()
-        camera_configs: list[OnvifClientConfig] = []
+        onvif_client = FakeOnvifClient()
+        client_configs: list[OnvifClientConfig] = []
         requested_uris: list[str] = []
 
-        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
-            camera_configs.append(config)
-            return FakeOnvifCamera(media_service)
+        def client_factory(config: OnvifClientConfig) -> FakeOnvifClient:
+            client_configs.append(config)
+            return onvif_client
 
         async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
             requested_uris.append(uri)
@@ -223,7 +313,7 @@ def test_onvif_snapshot_provider_reads_snapshot_uri_from_first_media_profile() -
 
         provider = OnvifSnapshotProvider(
             OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
-            camera_factory=camera_factory,
+            client_factory=client_factory,
             snapshot_fetcher=snapshot_fetcher,
         )
 
@@ -232,20 +322,20 @@ def test_onvif_snapshot_provider_reads_snapshot_uri_from_first_media_profile() -
         assert snapshot is not None
         assert snapshot.content == b"snapshot"
         assert snapshot.content_type == "image/jpeg"
-        assert media_service.snapshot_params == {"ProfileToken": "profile-token"}
+        assert onvif_client.snapshot_params == {"ProfileToken": "profile-token"}
         assert requested_uris == ["http://dnake.local/onvif/snapshot-1.jpg"]
-        assert camera_configs == [OnvifClientConfig(host="dnake.local", username="admin", password="secret")]
+        assert client_configs == [OnvifClientConfig(host="dnake.local", username="admin", password="secret")]
 
     asyncio.run(run())
 
 
 def test_onvif_snapshot_provider_caches_snapshot_uri() -> None:
     async def run() -> None:
-        media_service = FakeOnvifMediaService()
+        onvif_client = FakeOnvifClient()
         requested_uris: list[str] = []
 
-        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
-            return FakeOnvifCamera(media_service)
+        def client_factory(config: OnvifClientConfig) -> FakeOnvifClient:
+            return onvif_client
 
         async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
             requested_uris.append(uri)
@@ -253,14 +343,14 @@ def test_onvif_snapshot_provider_caches_snapshot_uri() -> None:
 
         provider = OnvifSnapshotProvider(
             OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
-            camera_factory=camera_factory,
+            client_factory=client_factory,
             snapshot_fetcher=snapshot_fetcher,
         )
 
         assert await provider.capture_snapshot() is not None
         assert await provider.capture_snapshot() is not None
 
-        assert media_service.snapshot_uri_calls == 1
+        assert onvif_client.snapshot_uri_calls == 1
         assert requested_uris == [
             "http://dnake.local/onvif/snapshot-1.jpg",
             "http://dnake.local/onvif/snapshot-1.jpg",
@@ -271,11 +361,11 @@ def test_onvif_snapshot_provider_caches_snapshot_uri() -> None:
 
 def test_onvif_snapshot_provider_refreshes_cached_uri_after_fetch_failure() -> None:
     async def run() -> None:
-        media_service = FakeOnvifMediaService()
+        onvif_client = FakeOnvifClient()
         requested_uris: list[str] = []
 
-        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
-            return FakeOnvifCamera(media_service)
+        def client_factory(config: OnvifClientConfig) -> FakeOnvifClient:
+            return onvif_client
 
         async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
             requested_uris.append(uri)
@@ -285,14 +375,14 @@ def test_onvif_snapshot_provider_refreshes_cached_uri_after_fetch_failure() -> N
 
         provider = OnvifSnapshotProvider(
             OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
-            camera_factory=camera_factory,
+            client_factory=client_factory,
             snapshot_fetcher=snapshot_fetcher,
         )
 
         assert await provider.capture_snapshot() is not None
         assert await provider.capture_snapshot() is not None
 
-        assert media_service.snapshot_uri_calls == 2
+        assert onvif_client.snapshot_uri_calls == 2
         assert requested_uris == [
             "http://dnake.local/onvif/snapshot-1.jpg",
             "http://dnake.local/onvif/snapshot-1.jpg",
@@ -305,25 +395,25 @@ def test_onvif_snapshot_provider_refreshes_cached_uri_after_fetch_failure() -> N
 def test_dnake_snapshot_provider_uses_onvif_config_from_dnake_client() -> None:
     async def run() -> None:
         client = FakeDnakeClient()
-        camera_configs: list[OnvifClientConfig] = []
+        client_configs: list[OnvifClientConfig] = []
 
-        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
-            camera_configs.append(config)
-            return FakeOnvifCamera(FakeOnvifMediaService())
+        def client_factory(config: OnvifClientConfig) -> FakeOnvifClient:
+            client_configs.append(config)
+            return FakeOnvifClient()
 
         async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
             return OnvifSnapshotResponse(200, b"snapshot", "image/jpeg")
 
         provider = DnakeSnapshotProvider(
             client,  # type: ignore[arg-type]
-            camera_factory=camera_factory,
+            client_factory=client_factory,
             snapshot_fetcher=snapshot_fetcher,
         )
 
         snapshot = await provider.capture_snapshot()
 
         assert snapshot is not None
-        assert camera_configs == [OnvifClientConfig(host="dnake.local", username="admin", password="secret")]
+        assert client_configs == [OnvifClientConfig(host="dnake.local", username="admin", password="secret")]
 
     asyncio.run(run())
 

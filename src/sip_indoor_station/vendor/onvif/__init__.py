@@ -3,7 +3,6 @@ from __future__ import annotations
 from sip_indoor_station.vendor.onvif.errors import (
     OnvifAuthError,
     OnvifConnectionError,
-    OnvifDependencyError,
     OnvifProviderError,
     OnvifResponseError,
 )
@@ -14,7 +13,6 @@ __all__ = [
     "OnvifAuthError",
     "OnvifClientConfig",
     "OnvifConnectionError",
-    "OnvifDependencyError",
     "OnvifProviderError",
     "OnvifResponseError",
     "OnvifSnapshotProvider",
