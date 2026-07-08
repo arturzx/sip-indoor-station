@@ -2,9 +2,13 @@
 
 Minimal SIP server and WebRTC audio bridge with calls history for SIP-capable home door stations on a LAN. It is meant to be a simple direct setup for home deployments where running a full PBX such as Asterisk with complicated configuration would be unnecessary overhead.
 
-The project is intended to stay vendor-neutral at the SIP/WebRTC layer. 
+The project is intended to stay vendor-neutral at the SIP/WebRTC layer.
 
-It has currently only been tested with HikVision DS-KV6113-WPE1(B) firmware 2.2.53.
+Tested door stations:
+
+- HikVision DS-KV6113-WPE1(B) firmware 2.2.53
+- Dahua VTO2211G-WP-S2
+- DNAKE C112
 
 This project currently implements:
 
@@ -260,6 +264,18 @@ For Dahua, the door request is sent to:
 ```text
 GET /cgi-bin/accessControl.cgi?action=openDoor&channel=<relay>
 ```
+
+For DNAKE devices with HTTP commands support, use `DOOR_STATION_VENDOR=dnake`. `API_PASSWORD`
+is the plain admin password; the client sends its MD5 hash as required by the device:
+
+```text
+GET /cgi-bin/webapi.cgi?api=unlock&index=<relay-1>&username=<API_USERNAME>&password=<md5(API_PASSWORD)>
+```
+
+The default `RELAYS_COUNT=1` maps `POST /api/open_door` to DNAKE `index=0`. Increase
+`RELAYS_COUNT` only for devices that expose more relay indexes.
+
+DNAKE snapshots use ONVIF `GetSnapshotUri` through the shared ONVIF snapshot provider.
 
 SIP remains responsible for call handling. Vendor API is currently used for door control plus optional status/fallback helpers.
 

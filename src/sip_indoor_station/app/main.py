@@ -72,6 +72,25 @@ async def main() -> None:
             )
             snapshot_provider = DahuaSnapshotProvider(api_client)
             door_opener = DahuaDoorApi(api_client, relays_count=config.relays_count)
+        elif vendor == "dnake":
+            from sip_indoor_station.vendor.dnake.client import DnakeApiClient
+            from sip_indoor_station.vendor.dnake.door import DnakeDoorApi
+            from sip_indoor_station.vendor.dnake.models import DnakeApiClientConfig
+            from sip_indoor_station.vendor.dnake.snapshot import DnakeSnapshotProvider
+
+            api_client = DnakeApiClient(
+                DnakeApiClientConfig(
+                    host=config.api_host,
+                    port=config.api_port,
+                    username=config.api_username,
+                    password=config.api_password,
+                    use_https=config.api_use_https,
+                    timeout_seconds=config.api_timeout_seconds,
+                    verify_ssl=config.api_verify_ssl,
+                )
+            )
+            snapshot_provider = DnakeSnapshotProvider(api_client)
+            door_opener = DnakeDoorApi(api_client, relays_count=config.relays_count)
         else:
             raise ValueError(f"Unsupported DOOR_STATION_VENDOR={vendor}")
     sip_server = SipServer(config, event_bus=event_bus, door_opener=door_opener, maintenance=maintenance)

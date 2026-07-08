@@ -16,6 +16,13 @@ from sip_indoor_station.vendor.dahua.client import DahuaApiClient
 from sip_indoor_station.vendor.dahua.door import DahuaDoorApi
 from sip_indoor_station.vendor.dahua.models import DahuaSnapshotResponse, DahuaApiClientConfig
 from sip_indoor_station.vendor.dahua.snapshot import DahuaSnapshotProvider
+from sip_indoor_station.vendor.dnake.client import DnakeApiClient
+from sip_indoor_station.vendor.dnake.door import DnakeDoorApi
+from sip_indoor_station.vendor.dnake.models import DnakeApiClientConfig
+from sip_indoor_station.vendor.dnake.snapshot import DnakeSnapshotProvider
+from sip_indoor_station.vendor.onvif.errors import OnvifConnectionError
+from sip_indoor_station.vendor.onvif.models import OnvifClientConfig, OnvifSnapshotResponse
+from sip_indoor_station.vendor.onvif.snapshot import OnvifSnapshotProvider
 from sip_indoor_station.sip.server import SipServer
 
 
@@ -61,6 +68,42 @@ class FakeDahuaClient:
     async def get_snapshot(self, channel: int = 1) -> DahuaSnapshotResponse:
         self.get_snapshot_calls.append(channel)
         return DahuaSnapshotResponse(200, b"snapshot")
+
+
+class FakeDnakeClient:
+    def __init__(self) -> None:
+        self.config = DnakeApiClientConfig(host="dnake.local", username="admin", password="secret")
+        self.requests: list[tuple[str, dict[str, object] | None]] = []
+
+    async def get(self, path: str, *, params: dict[str, object] | None = None, expect_json: bool = False) -> object:
+        self.requests.append((path, params))
+        return IsapiResponse(200, "OK")
+
+
+class FakeOnvifProfile:
+    token = "profile-token"
+
+
+class FakeOnvifMediaService:
+    def __init__(self) -> None:
+        self.snapshot_params: dict[str, object] | None = None
+        self.snapshot_uri_calls = 0
+
+    def GetProfiles(self) -> list[FakeOnvifProfile]:
+        return [FakeOnvifProfile()]
+
+    def GetSnapshotUri(self, params: dict[str, object]) -> dict[str, str]:
+        self.snapshot_uri_calls += 1
+        self.snapshot_params = params
+        return {"Uri": f"http://dnake.local/onvif/snapshot-{self.snapshot_uri_calls}.jpg"}
+
+
+class FakeOnvifCamera:
+    def __init__(self, media_service: FakeOnvifMediaService) -> None:
+        self.media_service = media_service
+
+    def create_media_service(self) -> FakeOnvifMediaService:
+        return self.media_service
 
 
 def test_isapi_client_builds_http_base_url() -> None:
@@ -139,6 +182,150 @@ def test_dahua_snapshot_provider_reads_dahua_snapshot_endpoint() -> None:
 def test_dahua_api_builds_http_base_url() -> None:
     client = DahuaApiClient(DahuaApiClientConfig(host="dahua.local", port=80))
     assert client.base_url == "http://dahua.local:80"
+
+
+def test_dnake_door_api_uses_http_unlock_with_zero_based_index_and_md5_password() -> None:
+    async def run() -> None:
+        client = FakeDnakeClient()
+        door = DnakeDoorApi(client, relays_count=2)  # type: ignore[arg-type]
+        assert await door.open_door(relay=1) is True
+        assert client.requests[-1] == (
+            "/cgi-bin/webapi.cgi",
+            {
+                "api": "unlock",
+                "index": 0,
+                "username": "admin",
+                "password": "5ebe2294ecd0e0f08eab7690d2a6ee69",
+            },
+        )
+
+    asyncio.run(run())
+
+
+def test_dnake_api_builds_http_base_url() -> None:
+    client = DnakeApiClient(DnakeApiClientConfig(host="dnake.local", port=80))
+    assert client.base_url == "http://dnake.local:80"
+
+
+def test_onvif_snapshot_provider_reads_snapshot_uri_from_first_media_profile() -> None:
+    async def run() -> None:
+        media_service = FakeOnvifMediaService()
+        camera_configs: list[OnvifClientConfig] = []
+        requested_uris: list[str] = []
+
+        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
+            camera_configs.append(config)
+            return FakeOnvifCamera(media_service)
+
+        async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
+            requested_uris.append(uri)
+            return OnvifSnapshotResponse(200, b"snapshot", "image/jpeg")
+
+        provider = OnvifSnapshotProvider(
+            OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
+            camera_factory=camera_factory,
+            snapshot_fetcher=snapshot_fetcher,
+        )
+
+        snapshot = await provider.capture_snapshot()
+
+        assert snapshot is not None
+        assert snapshot.content == b"snapshot"
+        assert snapshot.content_type == "image/jpeg"
+        assert media_service.snapshot_params == {"ProfileToken": "profile-token"}
+        assert requested_uris == ["http://dnake.local/onvif/snapshot-1.jpg"]
+        assert camera_configs == [OnvifClientConfig(host="dnake.local", username="admin", password="secret")]
+
+    asyncio.run(run())
+
+
+def test_onvif_snapshot_provider_caches_snapshot_uri() -> None:
+    async def run() -> None:
+        media_service = FakeOnvifMediaService()
+        requested_uris: list[str] = []
+
+        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
+            return FakeOnvifCamera(media_service)
+
+        async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
+            requested_uris.append(uri)
+            return OnvifSnapshotResponse(200, b"snapshot", "image/jpeg")
+
+        provider = OnvifSnapshotProvider(
+            OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
+            camera_factory=camera_factory,
+            snapshot_fetcher=snapshot_fetcher,
+        )
+
+        assert await provider.capture_snapshot() is not None
+        assert await provider.capture_snapshot() is not None
+
+        assert media_service.snapshot_uri_calls == 1
+        assert requested_uris == [
+            "http://dnake.local/onvif/snapshot-1.jpg",
+            "http://dnake.local/onvif/snapshot-1.jpg",
+        ]
+
+    asyncio.run(run())
+
+
+def test_onvif_snapshot_provider_refreshes_cached_uri_after_fetch_failure() -> None:
+    async def run() -> None:
+        media_service = FakeOnvifMediaService()
+        requested_uris: list[str] = []
+
+        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
+            return FakeOnvifCamera(media_service)
+
+        async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
+            requested_uris.append(uri)
+            if len(requested_uris) == 2:
+                raise OnvifConnectionError("cached uri failed")
+            return OnvifSnapshotResponse(200, b"snapshot", "image/jpeg")
+
+        provider = OnvifSnapshotProvider(
+            OnvifClientConfig(host="dnake.local", username="admin", password="secret"),
+            camera_factory=camera_factory,
+            snapshot_fetcher=snapshot_fetcher,
+        )
+
+        assert await provider.capture_snapshot() is not None
+        assert await provider.capture_snapshot() is not None
+
+        assert media_service.snapshot_uri_calls == 2
+        assert requested_uris == [
+            "http://dnake.local/onvif/snapshot-1.jpg",
+            "http://dnake.local/onvif/snapshot-1.jpg",
+            "http://dnake.local/onvif/snapshot-2.jpg",
+        ]
+
+    asyncio.run(run())
+
+
+def test_dnake_snapshot_provider_uses_onvif_config_from_dnake_client() -> None:
+    async def run() -> None:
+        client = FakeDnakeClient()
+        camera_configs: list[OnvifClientConfig] = []
+
+        def camera_factory(config: OnvifClientConfig) -> FakeOnvifCamera:
+            camera_configs.append(config)
+            return FakeOnvifCamera(FakeOnvifMediaService())
+
+        async def snapshot_fetcher(uri: str) -> OnvifSnapshotResponse:
+            return OnvifSnapshotResponse(200, b"snapshot", "image/jpeg")
+
+        provider = DnakeSnapshotProvider(
+            client,  # type: ignore[arg-type]
+            camera_factory=camera_factory,
+            snapshot_fetcher=snapshot_fetcher,
+        )
+
+        snapshot = await provider.capture_snapshot()
+
+        assert snapshot is not None
+        assert camera_configs == [OnvifClientConfig(host="dnake.local", username="admin", password="secret")]
+
+    asyncio.run(run())
 
 
 

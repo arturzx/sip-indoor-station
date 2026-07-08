@@ -1,3 +1,4 @@
 aiomqtt
 aiohttp>=3.12
+onvif-zeep>=0.2.12
 PyGObject
