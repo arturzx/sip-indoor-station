@@ -9,9 +9,13 @@ from sip_indoor_station.sip.messages import SipRequest, parse_sip_message
 from sip_indoor_station.sip.server import SipServer
 
 
-def make_server(sip_registration_store_path: str | None = None) -> SipServer:
+def make_server(
+    sip_registration_store_path: str | None = None,
+    sip_nonce_ttl: int = 300,
+) -> SipServer:
     config = Config(
         sip_realm="sip.local",
+        sip_nonce_ttl=sip_nonce_ttl,
         sip_registration_store_path=sip_registration_store_path,
         sip_users={"door": SipUser(username="door", password="secret", realm="sip.local")},
     )
@@ -69,7 +73,10 @@ def test_register_without_authorization_gets_challenge() -> None:
 
 def test_storing_successful_registration() -> None:
     server = make_server()
-    response = server.handle_register(register_message(authorization(server)), ("192.168.1.20", 5060))
+    response = server.handle_register(
+        register_message(authorization(server)),
+        ("192.168.1.20", 5060),
+    )
     assert response.status_code == 200
     assert response.headers["Contact"] == "<sip:door@192.168.1.20:5060>;expires=3600"
     assert response.headers["Expires"] == "3600"
@@ -79,6 +86,47 @@ def test_storing_successful_registration() -> None:
     assert registration.source_ip == "192.168.1.20"
     assert registration.source_port == 5060
     assert registration.user_agent == "DoorStation"
+
+
+def test_register_with_expired_nonce_gets_stale_challenge() -> None:
+    server = make_server(sip_nonce_ttl=-1)
+
+    response = server.handle_register(
+        register_message(authorization(server)),
+        ("192.168.1.20", 5060),
+    )
+
+    assert response.status_code == 401
+    params = parse_digest_header(response.headers["WWW-Authenticate"])
+    assert params["realm"] == "sip.local"
+    assert params["stale"] == "true"
+    assert params["nonce"]
+
+
+def test_register_with_bad_digest_response_stays_forbidden() -> None:
+    server = make_server()
+    nonce = server.nonce_store.generate()
+    auth = (
+        f'Digest username="door", realm="sip.local", nonce="{nonce}", uri="sip:server", '
+        'response="bad", algorithm=MD5, qop=auth, nc=00000001, cnonce="abc"'
+    )
+
+    response = server.handle_register(register_message(auth), ("192.168.1.20", 5060))
+
+    assert response.status_code == 403
+
+
+def test_register_with_expired_nonce_and_bad_digest_response_stays_forbidden() -> None:
+    server = make_server(sip_nonce_ttl=-1)
+    nonce = server.nonce_store.generate()
+    auth = (
+        f'Digest username="door", realm="sip.local", nonce="{nonce}", uri="sip:server", '
+        'response="bad", algorithm=MD5, qop=auth, nc=00000001, cnonce="abc"'
+    )
+
+    response = server.handle_register(register_message(auth), ("192.168.1.20", 5060))
+
+    assert response.status_code == 403
 
 
 def test_unregistering_with_expires_zero() -> None:

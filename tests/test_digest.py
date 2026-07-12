@@ -23,6 +23,11 @@ def test_generating_www_authenticate_challenge() -> None:
     assert challenge == 'Digest realm="sip.local", nonce="nonce-1", algorithm=MD5, qop="auth"'
 
 
+def test_generating_stale_www_authenticate_challenge() -> None:
+    challenge = build_www_authenticate("sip.local", "nonce-1", stale=True)
+    assert challenge == 'Digest realm="sip.local", nonce="nonce-1", algorithm=MD5, qop="auth", stale=true'
+
+
 def test_validate_correct_digest_response_with_qop_auth() -> None:
     store = NonceStore()
     nonce = store.generate()

@@ -6,8 +6,8 @@ import re
 import secrets
 import time
 from collections.abc import Callable
-from typing import Protocol
 from dataclasses import dataclass
+from typing import Protocol
 
 from sip_indoor_station.app.config import Config, SipUser
 from sip_indoor_station.app.events import AppEvent, EventBus
@@ -22,10 +22,11 @@ from sip_indoor_station.registrations.registry import (
     expires_from_register,
 )
 from sip_indoor_station.sip.digest import (
+    DigestValidationResult,
     NonceStore,
     build_www_authenticate,
+    check_digest_response,
     parse_digest_header,
-    validate_digest_response,
 )
 from sip_indoor_station.sip.headers import Headers
 from sip_indoor_station.sip.messages import SipRequest, SipResponse, build_sip_message, parse_sip_message, response_from_request
@@ -158,7 +159,11 @@ class SipServer:
         if not user:
             LOGGER.info("registration_failed reason=unknown_user source=%s username=%s", addr, params.get("username"))
             return self.unauthorized(request)
-        if not self._validate_digest(request.method, request.uri, params, user):
+        digest_validation = self._validate_digest(request.method, request.uri, params, user)
+        if not digest_validation.ok:
+            if digest_validation.reason == "invalid_nonce":
+                LOGGER.info("registration_failed reason=stale_nonce source=%s username=%s", addr, user.username)
+                return self.unauthorized(request, stale=True)
             LOGGER.info("registration_failed reason=bad_digest source=%s username=%s", addr, user.username)
             return response_from_request(request, 403, "Forbidden")
 
@@ -207,17 +212,23 @@ class SipServer:
             ],
         )
 
-    def unauthorized(self, request: SipRequest) -> SipResponse:
+    def unauthorized(self, request: SipRequest, *, stale: bool = False) -> SipResponse:
         nonce = self.nonce_store.generate()
         return response_from_request(
             request,
             401,
             "Unauthorized",
-            [("WWW-Authenticate", build_www_authenticate(self.config.sip_realm, nonce))],
+            [("WWW-Authenticate", build_www_authenticate(self.config.sip_realm, nonce, stale=stale))],
         )
 
-    def _validate_digest(self, method: str, uri: str, params: dict[str, str], user: SipUser) -> bool:
-        return validate_digest_response(
+    def _validate_digest(
+        self,
+        method: str,
+        uri: str,
+        params: dict[str, str],
+        user: SipUser,
+    ) -> DigestValidationResult:
+        return check_digest_response(
             method=method,
             params=params,
             username=user.username,

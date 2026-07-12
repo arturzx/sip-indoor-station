@@ -5,6 +5,24 @@ import hmac
 import secrets
 import time
 from dataclasses import dataclass
+from typing import Literal
+
+
+DigestFailureReason = Literal[
+    "missing_fields",
+    "invalid_identity",
+    "invalid_uri",
+    "unsupported_algorithm",
+    "invalid_nonce",
+    "unsupported_qop",
+    "bad_response",
+]
+
+
+@dataclass(frozen=True)
+class DigestValidationResult:
+    ok: bool
+    reason: DigestFailureReason | None = None
 
 
 def md5_hex(value: str) -> str:
@@ -73,8 +91,11 @@ class NonceStore:
             self._nonces.pop(nonce, None)
 
 
-def build_www_authenticate(realm: str, nonce: str) -> str:
-    return f'Digest realm="{realm}", nonce="{nonce}", algorithm=MD5, qop="auth"'
+def build_www_authenticate(realm: str, nonce: str, *, stale: bool = False) -> str:
+    value = f'Digest realm="{realm}", nonce="{nonce}", algorithm=MD5, qop="auth"'
+    if stale:
+        value += ", stale=true"
+    return value
 
 
 def calculate_digest_response(
@@ -95,7 +116,7 @@ def calculate_digest_response(
     return md5_hex(f"{ha1}:{nonce}:{ha2}")
 
 
-def validate_digest_response(
+def check_digest_response(
     method: str,
     params: dict[str, str],
     username: str,
@@ -103,23 +124,22 @@ def validate_digest_response(
     realm: str,
     nonce_store: NonceStore,
     expected_uri: str | None = None,
-) -> bool:
+) -> DigestValidationResult:
     required = {"username", "realm", "nonce", "uri", "response"}
     if not required.issubset(params):
-        return False
+        return DigestValidationResult(False, "missing_fields")
     if params["username"] != username or params["realm"] != realm:
-        return False
+        return DigestValidationResult(False, "invalid_identity")
     if expected_uri is not None and params["uri"] != expected_uri:
-        return False
+        return DigestValidationResult(False, "invalid_uri")
     if params.get("algorithm", "MD5").upper() != "MD5":
-        return False
-    if not nonce_store.validate(params["nonce"]):
-        return False
+        return DigestValidationResult(False, "unsupported_algorithm")
+    nonce_valid = nonce_store.validate(params["nonce"])
 
     qop = params.get("qop")
     if qop:
         if qop != "auth" or not params.get("nc") or not params.get("cnonce"):
-            return False
+            return DigestValidationResult(False, "unsupported_qop")
 
     expected = calculate_digest_response(
         method=method,
@@ -132,4 +152,28 @@ def validate_digest_response(
         nc=params.get("nc"),
         cnonce=params.get("cnonce"),
     )
-    return hmac.compare_digest(expected, params["response"])
+    if not hmac.compare_digest(expected, params["response"]):
+        return DigestValidationResult(False, "bad_response")
+    if not nonce_valid:
+        return DigestValidationResult(False, "invalid_nonce")
+    return DigestValidationResult(True)
+
+
+def validate_digest_response(
+    method: str,
+    params: dict[str, str],
+    username: str,
+    password: str,
+    realm: str,
+    nonce_store: NonceStore,
+    expected_uri: str | None = None,
+) -> bool:
+    return check_digest_response(
+        method=method,
+        params=params,
+        username=username,
+        password=password,
+        realm=realm,
+        nonce_store=nonce_store,
+        expected_uri=expected_uri,
+    ).ok
