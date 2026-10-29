@@ -277,6 +277,48 @@ The default `RELAYS_COUNT=1` maps `POST /api/open_door` to DNAKE `index=0`. Incr
 
 DNAKE snapshots use ONVIF `GetSnapshotUri` through the shared ONVIF snapshot provider.
 
+For Akuvox access-control devices, use `DOOR_STATION_VENDOR=akuvox` and enable the HTTP API on the
+device (Intercom -> HTTP API). Basic and Digest authentication are supported (set `API_USERNAME` /
+`API_PASSWORD`); with no auth or an IP allowlist, leave them empty.
+
+Door open always uses the device's `/fcgi/OpenDoor` command, which works for both the onboard relays
+and security relays:
+
+```text
+GET /fcgi/OpenDoor?action=OpenDoor&DoorNum=<door number>
+```
+
+Choose the controlled relays with `AKUVOX_DOOR_NUMS` (default `1`):
+
+```bash
+export AKUVOX_DOOR_NUMS=1         # onboard relay 1
+export AKUVOX_DOOR_NUMS=SA        # security relay A
+export AKUVOX_DOOR_NUMS=1,SA      # both: the first entry is the default, the second is relay 2
+```
+
+The values are the device's own `DoorNum` values: `1`, `2` for the onboard relay outputs (how many
+depends on the model) and `SA`, `SB` for security relays.
+
+Opening the door sends that `DoorNum`. With several relays / doors entries specified,
+this app's own `POST /api/open_door` endpoint selects the controlled entry by
+position: no body or `{"relay": 1}` sends the first entry, `{"relay": 2}` the second, and so on. The
+number of entries in the `AKUVOX_DOOR_NUMS` is the relay count (`RELAYS_COUNT` is ignored for Akuvox).
+
+`/fcgi/OpenDoor` uses its own Digest realm and rejects the API account unless the same user and
+password are also set on the device under **Open Relay Via HTTP**. Configure that user/password to
+match `API_USERNAME` / `API_PASSWORD`.
+
+Reboot uses `GET /api/system/reboot`.
+Snapshots use ONVIF through the shared ONVIF snapshot provider. If the ONVIF/MJPEG account differs
+from the API account, set `AKUVOX_ONVIF_USERNAME` / `AKUVOX_ONVIF_PASSWORD` (they default to
+`API_USERNAME` / `API_PASSWORD`). The MJPEG server must be enabled on the device: ONVIF advertises
+`http://<host>:8080/picture.jpg`, which redirects to a video stream, so the adapter fetches the same
+path over HTTPS (`https://<host>:8080/picture.jpg`) to get a single JPEG.
+
+When authentication is enabled, the device may answer plain HTTP with a redirect to HTTPS and drop
+the credentials; the client repeats the Digest handshake on the redirected URL. Setting
+`API_USE_HTTPS=true` and `API_PORT=443` avoids the redirect.
+
 SIP remains responsible for call handling. Vendor API is currently used for door control plus optional status/fallback helpers.
 
 ## WebRTC Audio Bridge

@@ -76,6 +76,9 @@ class Config:
     api_timeout_seconds: float = float(os.getenv("API_TIMEOUT_SECONDS", "5"))
     api_verify_ssl: bool = env_bool("API_VERIFY_SSL", False)
     relays_count: int = int(os.getenv("RELAYS_COUNT", "1"))
+    akuvox_door_nums: str = os.getenv("AKUVOX_DOOR_NUMS", "1")
+    akuvox_onvif_username: str | None = os.getenv("AKUVOX_ONVIF_USERNAME")
+    akuvox_onvif_password: str | None = os.getenv("AKUVOX_ONVIF_PASSWORD")
 
 
 def load_config() -> Config:
