@@ -63,13 +63,94 @@ Set `SIP_REGISTRATION_STORE_PATH` to a JSON file path to persist unexpired SIP r
 
 Set `LOCAL_ADDRESS` when `LISTEN_ADDRESS` is `0.0.0.0` but SIP/SDP must advertise a reachable LAN address. In Docker or Home Assistant add-on setups this is usually the Home Assistant host address, for example `192.168.0.123`. This address is also used as the first configured WebRTC host ICE candidate.
 
-## Home Assistant Add-on
 
-The Home Assistant add-on is maintained in a separate add-on repository:
+
+## Hassio Home Assistant Add-on
+
+The Home Assistant Hassio add-on is maintained in a separate add-on repository:
 
 ```text
 https://github.com/arturzx/sip-indoor-station-addon
 ```
+
+## Home Assistant in Docker
+
+Use Docker compose to deploy and configure the container.
+
+```bash
+docker pull ghcr.io/litinoveweedle/sip-indoor-station:latest
+```
+
+Tags: `latest`, `<version>` and `<major>.<minor>`, built for `linux/amd64` and `linux/arm64` on each release.
+Configure the container with the environment variables described in this README.
+
+### Docker Compose (next to a Home Assistant Docker installation)
+
+Example `docker-compose.yml` service, here for an Akuvox door station at `192.168.4.15`. The Docker host
+has the address `192.168.4.2` on the door station network and `192.168.1.2` on the LAN where HA clients / browsers runs, Home Assistants connect to the container via `127.0.0.1`:
+
+```yaml
+services:
+  sip-indoor-station:
+    image: ghcr.io/arturzx/sip-indoor-station:latest
+    container_name: sip-indoor-station
+    restart: unless-stopped
+    user: 1500:1500
+    ports:
+      - 192.168.4.2:5060:5060/udp            # SIP (door station network)
+      - 192.168.4.2:40000-40005:40000-40005/udp  # RTP media, must match RTP_PORT_MIN/MAX (door station network)
+      - 192.168.1.2:8556:8556/udp            # WebRTC ICE, must match WEBRTC_ICE_UDP_PORT (HA client network)
+      - 127.0.0.1:8080:8080/tcp              # HTTP API (HA network)
+    environment:
+      - LISTEN_ADDRESS=0.0.0.0
+      - LOCAL_ADDRESS=192.168.4.2            # address the door station reaches the host on
+      - HTTP_PORT=8080
+      - RTP_PORT_MIN=40000
+      - RTP_PORT_MAX=40005
+      # WebRTC
+      - WEBRTC_SINGLE_PEER=true
+      - WEBRTC_ICE_TRANSPORT_POLICY=all
+      - WEBRTC_ICE_UDP_PORT=8556
+      - WEBRTC_ICE_CANDIDATES=192.168.1.2:8556
+      # SIP account the door station registers with
+      - SIP_USERNAME=800
+      - SIP_PASSWORD=<sip password>
+      - SIP_NONCE_TTL=300
+      - SIP_REGISTRATION_TTL=3600
+      - SIP_REGISTRATION_STORE_PATH=/data/sip_registrations.json
+      # Call history
+      - CALL_HISTORY_ENABLED=false
+      - CALL_HISTORY_DAYS=30
+      - CALL_HISTORY_DB_PATH=/data/call_history.sqlite
+      # Door station API
+      - API_ENABLED=true
+      - DOOR_STATION_VENDOR=akuvox
+      - API_HOST=192.168.4.15
+      - API_PORT=443
+      - API_USE_HTTPS=true
+      - API_VERIFY_SSL=false
+      - API_TIMEOUT_SECONDS=5
+      - API_USERNAME=api
+      - API_PASSWORD=<api password>
+    volumes:
+      - ./sip-station/data:/data
+```
+
+Notes:
+
+- **Ports:** Publish SIP (`5060/udp`) and the the RTP range to be accessible by the door station. The published RTP range must be
+  equal to `RTP_PORT_MIN`/`RTP_PORT_MAX`. Publish the WebRTC ICE UDP port to be accessible by HomeAssistant clients (PC, phones etc). The port must be same as `WEBRTC_ICE_UDP_PORT`. The container's HTTP port `HTTP_PORT` (default `8080`) must be published so it is reachable by the HomeAssistant itself.
+- **`LOCAL_ADDRESS`:** the Docker host address the door station can reach. It is advertised in SIP/SDP.
+- **`WEBRTC_ICE_CANDIDATES`:** the host address and published UDP port that HomeAssistant clients use to reach WebRTC media. See the WebRTC section below.
+- **Door station:** configure the door station's SIP account to register to `LOCAL_ADDRESS:5060` with
+  `SIP_USERNAME` / `SIP_PASSWORD`.
+- **Data volume:** `/data` holds the SIP registrations and call history. With `user: 1500:1500`, make the
+  host directory writable by that user: `mkdir -p sip-station/data && chown 1500:1500 sip-station/data`.
+- **Home Assistant:** use the HTTP API (`POST /api/open_door` and friends, see the HTTP API section) from
+  Home Assistant, for example with a `rest_command` pointing to `http://127.0.0.1:8880` if Home Assistant
+  runs with host networking, or to the container name on a shared Docker network.
+
+
 
 ## Door Station SIP Account
 
