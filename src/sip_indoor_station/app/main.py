@@ -91,6 +91,25 @@ async def main() -> None:
             )
             snapshot_provider = DnakeSnapshotProvider(api_client)
             door_opener = DnakeDoorApi(api_client, relays_count=config.relays_count)
+        elif vendor == "akuvox":
+            from sip_indoor_station.vendor.akuvox.client import AkuvoxApiClient
+            from sip_indoor_station.vendor.akuvox.door import AkuvoxDoorApi
+            from sip_indoor_station.vendor.akuvox.models import AkuvoxApiClientConfig
+            from sip_indoor_station.vendor.akuvox.snapshot import AkuvoxSnapshotProvider
+
+            api_client = AkuvoxApiClient(
+                AkuvoxApiClientConfig(
+                    host=config.api_host,
+                    port=config.api_port,
+                    username=config.api_username,
+                    password=config.api_password,
+                    use_https=config.api_use_https,
+                    timeout_seconds=config.api_timeout_seconds,
+                    verify_ssl=config.api_verify_ssl,
+                )
+            )
+            snapshot_provider = AkuvoxSnapshotProvider(api_client)
+            door_opener = AkuvoxDoorApi(api_client, relays_count=config.relays_count)
         else:
             raise ValueError(f"Unsupported DOOR_STATION_VENDOR={vendor}")
     sip_server = SipServer(config, event_bus=event_bus, door_opener=door_opener, maintenance=maintenance)
