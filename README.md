@@ -9,6 +9,7 @@ Tested door stations:
 - HikVision DS-KV6113-WPE1(B) firmware 2.2.53
 - Dahua VTO2211G-WP-S2
 - DNAKE C112
+- Akuvox door station (model not specified)
 
 This project currently implements:
 
@@ -276,6 +277,18 @@ The default `RELAYS_COUNT=1` maps `POST /api/open_door` to DNAKE `index=0`. Incr
 `RELAYS_COUNT` only for devices that expose more relay indexes.
 
 DNAKE snapshots use ONVIF `GetSnapshotUri` through the shared ONVIF snapshot provider.
+
+For Akuvox devices, set `DOOR_STATION_VENDOR=akuvox` and configure `API_HOST`,
+`API_PORT`, `API_USERNAME`, and `API_PASSWORD` as shown above. The client uses
+HTTP Digest authentication. Door control sends:
+
+```text
+GET /fcgi/OpenDoor?action=OpenDoor&DoorNum=<relay>
+```
+
+Akuvox snapshots are fetched from `http://<API_HOST>:8080/picture.jpg`. The snapshot
+port and path are fixed by the device integration; `API_PORT` configures the door
+control API connection.
 
 SIP remains responsible for call handling. Vendor API is currently used for door control plus optional status/fallback helpers.
 
