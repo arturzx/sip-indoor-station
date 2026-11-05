@@ -9,7 +9,7 @@ Tested door stations:
 - HikVision DS-KV6113-WPE1(B) firmware 2.2.53
 - Dahua VTO2211G-WP-S2
 - DNAKE C112
-- Akuvox door station (model not specified)
+- Akuvox R20A
 
 This project currently implements:
 
