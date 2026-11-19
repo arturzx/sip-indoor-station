@@ -16,8 +16,10 @@ def _normalize_vendor(value: str | None) -> str:
 
 
 async def main() -> None:
+    import os
+    _log_level = getattr(logging, os.getenv("LOG_LEVEL", "info").upper(), logging.INFO)
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=_log_level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     config = load_config()
@@ -91,8 +93,35 @@ async def main() -> None:
             )
             snapshot_provider = DnakeSnapshotProvider(api_client)
             door_opener = DnakeDoorApi(api_client, relays_count=config.relays_count)
+        elif vendor == "akuvox":
+            logging.getLogger(__name__).warning(
+                "Akuvox vendor is recognized but HTTP API integration is not yet supported; "
+                "set api_enabled: false to suppress this warning"
+            )
         else:
             raise ValueError(f"Unsupported DOOR_STATION_VENDOR={vendor}")
+    if _normalize_vendor(config.door_station_vendor) == "akuvox" and config.api_host:
+        from sip_indoor_station.vendor.onvif.snapshot import OnvifSnapshotProvider
+        from sip_indoor_station.vendor.onvif.models import OnvifClientConfig
+        snapshot_provider = OnvifSnapshotProvider(
+            OnvifClientConfig(
+                host=config.api_host,
+                port=config.onvif_port,
+                username=config.api_username,
+                password=config.api_password,
+            ),
+            profile_index=config.onvif_profile_index,
+        )
+        logging.getLogger(__name__).info(
+            "akuvox_onvif_snapshot_enabled host=%s port=%s profile=%s",
+            config.api_host, config.onvif_port, config.onvif_profile_index,
+        )
+    try:
+        from sip_indoor_station.media.gstreamer_webrtc_bridge import warmup_gstreamer
+
+        await asyncio.get_running_loop().run_in_executor(None, warmup_gstreamer)
+    except Exception:
+        logging.getLogger(__name__).warning("gstreamer_warmup_failed", exc_info=True)
     sip_server = SipServer(config, event_bus=event_bus, door_opener=door_opener, maintenance=maintenance)
     if config.call_history_enabled:
         call_history = (
@@ -100,7 +129,7 @@ async def main() -> None:
             if config.call_history_enabled
             else None
         )
-    state_api = StateApi(event_bus, sip_server, config, call_history)
+    state_api = StateApi(event_bus, sip_server, config, call_history, snapshot_provider)
     for registration in sip_server.registrations.active():
         await event_bus.publish(
             AppEvent(

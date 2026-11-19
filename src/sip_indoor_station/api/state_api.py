@@ -28,11 +28,13 @@ class StateApi:
         call_controller: CallController,
         config: Config,
         call_history: CallHistoryStore | None = None,
+        snapshot_provider: object | None = None,
     ) -> None:
         self.event_bus = event_bus
         self.call_controller = call_controller
         self.config = config
         self.call_history = call_history
+        self.snapshot_provider = snapshot_provider
         self.state = AppState()
         self._websockets: set[web.WebSocketResponse] = set()
         self.event_bus.subscribe(self.handle_event)
@@ -46,6 +48,7 @@ class StateApi:
         app.router.add_post("/api/open_door", self.open_door)
         app.router.add_post("/api/reboot", self.reboot)
         app.router.add_get("/api/ws", self.websocket)
+        app.router.add_get("/api/snapshot", self.snapshot)
         if self.call_history is not None:
             self.call_history.register_routes(app)
 
@@ -86,6 +89,19 @@ class StateApi:
 
     async def reboot(self, _request: web.Request) -> web.Response:
         return await self._run_call_command("reboot", self.call_controller.reboot)
+
+    async def snapshot(self, _request: web.Request) -> web.Response:
+        if self.snapshot_provider is None:
+            return web.json_response({"ok": False, "reason": "no_snapshot_provider_configured"}, status=404)
+        try:
+            result = await self.snapshot_provider.capture_snapshot()  # type: ignore[union-attr]
+        except Exception as exc:
+            LOGGER.warning("api_snapshot_error error=%s", exc)
+            return web.json_response({"ok": False, "reason": str(exc)}, status=500)
+        if result is None:
+            return web.json_response({"ok": False, "reason": "snapshot_failed_see_logs"}, status=500)
+        LOGGER.info("api_snapshot_ok size=%d content_type=%s", len(result.content), result.content_type)
+        return web.Response(body=result.content, content_type=result.content_type or "image/jpeg")
 
     async def _parse_relay(self, request: web.Request | None) -> int | None:
         if request is None:

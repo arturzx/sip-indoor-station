@@ -1,3 +1,5 @@
+import asyncio
+
 from sip_indoor_station.app.config import Config, SipUser
 from sip_indoor_station.app.events import EventBus
 from sip_indoor_station.registrations.registry import RegistrationRegistry
@@ -512,5 +514,24 @@ def test_hangup_current_call_before_ack_still_sends_bye() -> None:
         assert raw.startswith("BYE sip:door@192.168.1.20:5060 SIP/2.0")
 
     import asyncio
+
+    asyncio.run(run())
+
+
+def test_invite_prepares_media_while_ringing() -> None:
+    async def run() -> None:
+        server = make_server()
+        transport = FakeTransport()
+        server.transport = transport  # type: ignore[assignment]
+        request = invite_with_sdp("8", "a=rtpmap:8 PCMA/8000\r\n")
+        server.handle_invite(request, ("192.168.1.20", 5060))
+
+        # Let the background prewarm task run; the call has not been answered yet.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        session = server.calls.get("invite-1")
+        assert session.state == "ringing"  # type: ignore[union-attr]
+        assert session.media_session.prepared is True  # type: ignore[union-attr]
 
     asyncio.run(run())

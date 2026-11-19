@@ -124,7 +124,10 @@ class SipServer:
         try:
             message = parse_sip_message(data)
         except ValueError as exc:
-            LOGGER.warning("sip_parse_failed addr=%s error=%s", addr, exc)
+            if self._is_vendor_keepalive(data):
+                LOGGER.debug("sip_keepalive_ignored addr=%s vendor=%s", addr, self.config.door_station_vendor)
+            else:
+                LOGGER.warning("sip_parse_failed addr=%s error=%s", addr, exc)
             return []
         if not isinstance(message, SipRequest):
             return []
@@ -300,6 +303,7 @@ class SipServer:
             local_cseq=self.next_local_cseq(cseq),
         )
         self.calls.add(session)
+        self.prewarm_media(session)
         self.emit(
             "incoming_call",
             call_id=call_id,
@@ -348,6 +352,7 @@ class SipServer:
 
     async def answer_current_call(self) -> bool:
         session = self.calls.current()
+        LOGGER.info("cmd_answer call_state=%s call_id=%s", session.state if session else None, session.call_id if session else None)
         if not session or session.state != "ringing":
             LOGGER.info("answer_current_call_ignored reason=no_ringing_call")
             await self.publish_command_rejected("answer", "no_ringing_call")
@@ -364,11 +369,13 @@ class SipServer:
         self.remember_completed_invite(session, response)
         self.send_response(response, session.invite_source)
         session.transition("answered_waiting_ack")
+        LOGGER.info("cmd_answer_ok call_id=%s", session.call_id)
         await self.event_bus.publish(AppEvent("call_answered", call_id=session.call_id))
         return True
 
     async def reject_current_call(self) -> bool:
         session = self.calls.current()
+        LOGGER.info("cmd_reject call_state=%s call_id=%s", session.state if session else None, session.call_id if session else None)
         if not session or session.state != "ringing":
             LOGGER.info("reject_current_call_ignored reason=no_ringing_call")
             await self.publish_command_rejected("reject", "no_ringing_call")
@@ -384,11 +391,13 @@ class SipServer:
         if session.media_session is not None:
             await session.media_session.stop()
         self.release_call_media(session)
+        LOGGER.info("cmd_reject_ok call_id=%s", session.call_id)
         await self.event_bus.publish(AppEvent("call_rejected", call_id=session.call_id))
         return True
 
     async def hangup_current_call(self) -> bool:
         session = self.calls.current()
+        LOGGER.info("cmd_hangup call_state=%s call_id=%s", session.state if session else None, session.call_id if session else None)
         if not session or session.state not in {"answered_waiting_ack", "confirmed"}:
             LOGGER.info("hangup_current_call_ignored reason=no_active_call")
             await self.publish_command_rejected("hangup", "no_active_call")
@@ -400,10 +409,13 @@ class SipServer:
         if session.media_session is not None:
             await session.media_session.stop()
         self.release_call_media(session)
+        LOGGER.info("cmd_hangup_ok call_id=%s", session.call_id)
         await self.event_bus.publish(AppEvent("call_ended", call_id=session.call_id))
         return True
 
     async def open_door(self, relay: int = 1) -> bool:
+        if self.config.door_station_vendor == "akuvox":
+            return await self._open_door_akuvox_dtmf(relay)
         if self.door_opener is None:
             reason = "api_disabled" if not self.config.api_enabled else "api_not_configured"
             LOGGER.info("open_door_ignored reason=%s", reason)
@@ -478,7 +490,7 @@ class SipServer:
     async def prepare_media_and_build_sdp_answer(self, session: CallSession) -> str:
         if session.media_session is None:
             session.media_session = self.create_media_session(session)
-            await session.media_session.prepare()
+        await session.media_session.prepare()
         session.sdp_answer = build_sdp_answer(
             self.advertised_address(),
             session.local_rtp_port,
@@ -489,6 +501,25 @@ class SipServer:
             reject_video_fmtp=session.video_fmtp,
         )
         return session.sdp_answer
+
+    def prewarm_media(self, session: CallSession) -> None:
+        """Build the media pipeline while the door station is still ringing."""
+        try:
+            loop = asyncio.get_running_loop()
+            if session.media_session is None:
+                session.media_session = self.create_media_session(session)
+            media = session.media_session
+        except Exception:
+            LOGGER.warning("media_prewarm_skipped call_id=%s", session.call_id, exc_info=True)
+            return
+
+        async def run() -> None:
+            try:
+                await media.prepare()
+            except Exception:
+                LOGGER.warning("media_prewarm_failed call_id=%s", session.call_id, exc_info=True)
+
+        loop.create_task(run())
 
     def create_media_session(self, session: CallSession) -> MediaSession:
         if self.media_session_factory is not None:
@@ -522,6 +553,16 @@ class SipServer:
     def release_call_media(self, session: CallSession) -> None:
         self.port_allocator.release(session.local_rtp_port)
 
+    def _is_vendor_keepalive(self, data: bytes) -> bool:
+        """Return True for known non-SIP keepalive packets sent by specific door station vendors.
+
+        Akuvox devices (e.g. R20A) periodically send short binary keepalive packets
+        containing null bytes that are not valid SIP and would otherwise flood the logs.
+        """
+        if self.config.door_station_vendor == "akuvox":
+            return b"\x00" in data
+        return False
+
     def listen_address(self) -> str:
         return self.config.listen_address
 
@@ -549,6 +590,45 @@ class SipServer:
             asyncio.get_running_loop().create_task(session.media_session.stop())
         except RuntimeError:
             LOGGER.warning("media_stop_skipped_no_event_loop call_id=%s", session.call_id)
+
+    async def _open_door_akuvox_dtmf(self, relay: int) -> bool:
+        session = self.calls.current()
+        LOGGER.info("cmd_open_door relay=%s call_state=%s call_id=%s", relay, session.state if session else None, session.call_id if session else None)
+        if session is None or session.state not in {"answered_waiting_ack", "confirmed"}:
+            LOGGER.info("open_door_dtmf_ignored reason=no_active_call relay=%s", relay)
+            await self.publish_command_rejected("open_door", "no_active_call")
+            return False
+        dtmf_digits = {1: self.config.akuvox_relay1_dtmf, 2: self.config.akuvox_relay2_dtmf}
+        digit = dtmf_digits.get(relay)
+        if not digit:
+            LOGGER.info("open_door_dtmf_ignored reason=invalid_relay relay=%s", relay)
+            await self.publish_command_rejected("open_door", "invalid_relay")
+            return False
+        info = self.info_for_call_dtmf(session, digit)
+        self.send_request(info, session.invite_source)
+        LOGGER.info("open_door_dtmf_sent relay=%s digit=%s call_id=%s", relay, digit, session.call_id)
+        await self.event_bus.publish(AppEvent("door_open_command_sent", data={"source": "dtmf", "relay": relay}))
+        return True
+
+    def info_for_call_dtmf(self, session: CallSession, digit: str) -> SipRequest:
+        session.local_cseq += 1
+        headers = Headers()
+        headers.add(
+            "Via",
+            f"SIP/2.0/UDP {self.advertised_address()}:{self.config.sip_port};branch=z9hG4bK-{secrets.token_hex(8)}",
+        )
+        headers.add("Max-Forwards", "70")
+        headers.add("From", self.local_dialog_header(session))
+        to_header = session.invite_request.headers.get("From")
+        if to_header is not None:
+            headers.add("To", to_header)
+        headers.add("Call-ID", session.call_id)
+        headers.add("CSeq", f"{session.local_cseq} INFO")
+        headers.add("Contact", self.server_contact_header())
+        body = f"Signal={digit}\r\nDuration=160\r\n"
+        headers.add("Content-Type", "application/dtmf-relay")
+        headers.add("Content-Length", str(len(body.encode())))
+        return SipRequest(method="INFO", uri=session.remote_target_uri, headers=headers, body=body)
 
     def bye_for_call(self, session: CallSession) -> SipRequest:
         headers = Headers()

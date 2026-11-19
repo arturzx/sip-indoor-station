@@ -5,6 +5,7 @@ import logging
 import re
 import ctypes
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -97,6 +98,8 @@ class GStreamerWebRtcBridge(MediaSession):
         self.webrtc_opus_payload_type = 111
         self._ice_candidate_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._asyncio_loop: asyncio.AbstractEventLoop | None = None
+        self._prepare_lock = asyncio.Lock()
+        self._stopped = False
 
     @property
     def sip_audio_elements(self) -> SipAudioCodecElements:
@@ -106,8 +109,17 @@ class GStreamerWebRtcBridge(MediaSession):
             raise ValueError(f"unsupported SIP audio codec: {self.selected_codec}") from exc
 
     async def prepare(self) -> None:
+        # Heavy GStreamer setup runs in a worker thread so it never blocks the
+        # asyncio loop (SIP/HTTP) and can be started while the door station rings.
+        async with self._prepare_lock:
+            if self._prepared or self._stopped:
+                return
+            await asyncio.get_running_loop().run_in_executor(None, self._prepare_sync)
+
+    def _prepare_sync(self) -> None:
         if self._prepared:
             return
+        t0 = time.monotonic()
         check_required_elements().assert_available()
         self._load_gstreamer()
         self._start_glib_loop()
@@ -159,6 +171,7 @@ class GStreamerWebRtcBridge(MediaSession):
             self.selected_payload_type,
             self.ice_udp_port,
         )
+        LOGGER.info("media_prepare_duration call_id=%s seconds=%.3f", self.call_id, time.monotonic() - t0)
 
     async def start(self) -> None:
         await self.prepare()
@@ -171,6 +184,11 @@ class GStreamerWebRtcBridge(MediaSession):
         LOGGER.info("media_started call_id=%s", self.call_id)
 
     async def stop(self) -> None:
+        async with self._prepare_lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
+        self._stopped = True
         self._disconnect_gstreamer_signals()
         if self.pipeline is not None:
             self.pipeline.set_state(self._gst.State.NULL)
@@ -535,3 +553,21 @@ class GStreamerWebRtcBridge(MediaSession):
         elif msg_type == self._gst.MessageType.STATE_CHANGED and message.src == self.pipeline:
             old, new, pending = message.parse_state_changed()
             LOGGER.debug("gstreamer_state call_id=%s old=%s new=%s pending=%s", self.call_id, old, new, pending)
+
+
+def warmup_gstreamer() -> None:
+    """Load GStreamer, plugins and the element registry once, at add-on start."""
+    t0 = time.monotonic()
+    check_required_elements().assert_available()
+    import gi
+
+    gi.require_version("Gst", "1.0")
+    gi.require_version("GstWebRTC", "1.0")
+    gi.require_version("GstSdp", "1.0")
+    from gi.repository import Gst, GstSdp, GstWebRTC  # noqa: F401
+
+    Gst.init(None)
+    Gst.Plugin.load_by_name("webrtc")
+    for name in ("webrtcbin", "opusenc", "rtpopuspay", "rtpjitterbuffer", "alawdec", "mulawdec", "udpsrc"):
+        Gst.ElementFactory.find(name).load() if Gst.ElementFactory.find(name) else None
+    LOGGER.info("gstreamer_warmup_done seconds=%.3f", time.monotonic() - t0)
