@@ -303,6 +303,7 @@ class SipServer:
             local_cseq=self.next_local_cseq(cseq),
         )
         self.calls.add(session)
+        self.prewarm_media(session)
         self.emit(
             "incoming_call",
             call_id=call_id,
@@ -489,7 +490,7 @@ class SipServer:
     async def prepare_media_and_build_sdp_answer(self, session: CallSession) -> str:
         if session.media_session is None:
             session.media_session = self.create_media_session(session)
-            await session.media_session.prepare()
+        await session.media_session.prepare()
         session.sdp_answer = build_sdp_answer(
             self.advertised_address(),
             session.local_rtp_port,
@@ -500,6 +501,25 @@ class SipServer:
             reject_video_fmtp=session.video_fmtp,
         )
         return session.sdp_answer
+
+    def prewarm_media(self, session: CallSession) -> None:
+        """Build the media pipeline while the door station is still ringing."""
+        try:
+            loop = asyncio.get_running_loop()
+            if session.media_session is None:
+                session.media_session = self.create_media_session(session)
+            media = session.media_session
+        except Exception:
+            LOGGER.warning("media_prewarm_skipped call_id=%s", session.call_id, exc_info=True)
+            return
+
+        async def run() -> None:
+            try:
+                await media.prepare()
+            except Exception:
+                LOGGER.warning("media_prewarm_failed call_id=%s", session.call_id, exc_info=True)
+
+        loop.create_task(run())
 
     def create_media_session(self, session: CallSession) -> MediaSession:
         if self.media_session_factory is not None:

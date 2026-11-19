@@ -116,6 +116,12 @@ async def main() -> None:
             "akuvox_onvif_snapshot_enabled host=%s port=%s profile=%s",
             config.api_host, config.onvif_port, config.onvif_profile_index,
         )
+    try:
+        from sip_indoor_station.media.gstreamer_webrtc_bridge import warmup_gstreamer
+
+        await asyncio.get_running_loop().run_in_executor(None, warmup_gstreamer)
+    except Exception:
+        logging.getLogger(__name__).warning("gstreamer_warmup_failed", exc_info=True)
     sip_server = SipServer(config, event_bus=event_bus, door_opener=door_opener, maintenance=maintenance)
     if config.call_history_enabled:
         call_history = (

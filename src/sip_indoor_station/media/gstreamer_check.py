@@ -41,8 +41,22 @@ class GStreamerCheckResult:
             raise RuntimeError(f"GStreamer WebRTC audio bridge requirements are not available: {details}")
 
 
+_CACHED_DEFAULT_RESULT: GStreamerCheckResult | None = None
+
+
 def check_required_elements(required: list[str] | None = None) -> GStreamerCheckResult:
-    required = required or REQUIRED_GSTREAMER_ELEMENTS
+    global _CACHED_DEFAULT_RESULT
+    if required is None:
+        if _CACHED_DEFAULT_RESULT is not None and _CACHED_DEFAULT_RESULT.available:
+            return _CACHED_DEFAULT_RESULT
+        result = _check_required_elements(REQUIRED_GSTREAMER_ELEMENTS)
+        if result.available:
+            _CACHED_DEFAULT_RESULT = result
+        return result
+    return _check_required_elements(required)
+
+
+def _check_required_elements(required: list[str]) -> GStreamerCheckResult:
     try:
         import gi
 
