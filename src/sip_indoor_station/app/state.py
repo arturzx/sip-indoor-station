@@ -103,17 +103,11 @@ def apply_event_to_state(state: AppState, event: AppEvent) -> AppState:
     elif event.name in {"call_answered", "call_confirmed"}:
         state.call_state = "answered"
         state.call_id = event.call_id or state.call_id
-    elif event.name == "call_rejected":
-        state.call_state = "rejected"
-        state.call_id = event.call_id or state.call_id
-    elif event.name == "call_cancelled":
-        state.call_state = "cancelled"
-        state.call_id = event.call_id or state.call_id
-    elif event.name == "call_ended":
-        state.call_state = "ended"
-        state.call_id = event.call_id or state.call_id
-    elif event.name == "call_failed":
-        state.call_state = "failed"
-        state.call_id = event.call_id or state.call_id
+    elif event.name in {"call_rejected", "call_cancelled", "call_ended", "call_failed"}:
+        state.call_state = "idle"
+        state.call_id = None
+        state.remote_ip = None
+        state.selected_audio_codec = None
+        state.selected_audio_payload_type = None
 
     return state

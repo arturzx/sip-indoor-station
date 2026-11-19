@@ -76,6 +76,10 @@ class Config:
     api_timeout_seconds: float = float(os.getenv("API_TIMEOUT_SECONDS", "5"))
     api_verify_ssl: bool = env_bool("API_VERIFY_SSL", False)
     relays_count: int = int(os.getenv("RELAYS_COUNT", "1"))
+    onvif_port: int = int(os.getenv("ONVIF_PORT", "80"))
+    onvif_profile_index: int = int(os.getenv("ONVIF_PROFILE_INDEX", "0"))
+    akuvox_relay1_dtmf: str = os.getenv("AKUVOX_RELAY1_DTMF", "*")
+    akuvox_relay2_dtmf: str = os.getenv("AKUVOX_RELAY2_DTMF", "#")
 
 
 def load_config() -> Config:

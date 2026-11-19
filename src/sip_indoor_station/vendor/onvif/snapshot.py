@@ -24,7 +24,7 @@ from sip_indoor_station.vendor.onvif.models import OnvifClientConfig, OnvifSnaps
 
 LOGGER = logging.getLogger(__name__)
 
-SOAP_ENV_NS = "http://www.w3.org/2003/05/soap-envelope"
+SOAP_ENV_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 DEVICE_NS = "http://www.onvif.org/ver10/device/wsdl"
 MEDIA_NS = "http://www.onvif.org/ver10/media/wsdl"
 WSSE_NS = (
@@ -75,6 +75,7 @@ class OnvifSnapshotProvider:
 
     async def capture_snapshot(self) -> Snapshot | None:
         had_cached_uri = self._snapshot_uri is not None
+        LOGGER.info("onvif_snapshot_start host=%s cached_uri=%s", self.config.host, had_cached_uri)
         try:
             uri = await self.get_cached_snapshot_uri()
             response = await self.snapshot_fetcher(uri)
@@ -88,8 +89,9 @@ class OnvifSnapshotProvider:
             return None
 
         if not response.content:
+            LOGGER.warning("onvif_snapshot_empty_response status=%s", response.status)
             return None
-        LOGGER.info("onvif_snapshot_success status=%s", response.status)
+        LOGGER.info("onvif_snapshot_ok status=%s size=%d content_type=%s", response.status, len(response.content), response.content_type)
         return Snapshot(response.content, response.content_type or "image/jpeg")
 
     async def get_cached_snapshot_uri(self) -> str:
@@ -119,6 +121,7 @@ class OnvifSnapshotProvider:
             uri = await client.get_snapshot_uri(str(profile_token))
             if not uri:
                 raise OnvifResponseError("ONVIF GetSnapshotUri returned no Uri")
+            LOGGER.info("onvif_snapshot_uri_resolved profile_token=%s uri=%s", profile_token, uri)
             return uri
         except OnvifProviderError:
             raise
@@ -165,19 +168,28 @@ class LightweightOnvifClient:
 
     def url(self, path: str) -> str:
         if path.startswith(("http://", "https://")):
-            return path
+            # Normalize double slashes in path portion (Akuvox quirk: XAddr = /onvif//device_service)
+            scheme_end = path.index("://") + 3
+            rest = path[scheme_end:]
+            while "//" in rest:
+                rest = rest.replace("//", "/")
+            return path[:scheme_end] + rest
         if not path.startswith("/"):
             path = "/" + path
+        while "//" in path:
+            path = path.replace("//", "/")
         return self.base_url + path
 
     async def get_profiles(self) -> list[dict[str, str]]:
         media_service_url = await self.get_media_service_url()
-        root = await self.soap_request(
-            media_service_url,
-            "GetProfiles",
-            f"{MEDIA_NS}/GetProfiles",
-            "<trt:GetProfiles/>",
-        )
+        try:
+            root = await self.soap_request(media_service_url, "GetProfiles", f"{MEDIA_NS}/GetProfiles", "<trt:GetProfiles/>")
+        except OnvifProviderError as exc:
+            if media_service_url == self.default_media_service_url:
+                raise
+            LOGGER.debug("onvif_get_profiles_failed_at_discovered_url_trying_default url=%s reason=%s", media_service_url, exc)
+            self._media_service_url = self.default_media_service_url
+            root = await self.soap_request(self.default_media_service_url, "GetProfiles", f"{MEDIA_NS}/GetProfiles", "<trt:GetProfiles/>")
         profiles: list[dict[str, str]] = []
         for element in root.iter():
             if _local_name(element.tag) == "Profiles":
@@ -213,11 +225,12 @@ class LightweightOnvifClient:
                 f"{DEVICE_NS}/GetCapabilities",
                 "<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>",
             )
-            xaddr = _first_text(root, "XAddr")
+            xaddr = _media_section_xaddr(root)
         except OnvifProviderError as exc:
             LOGGER.debug("onvif_capabilities_failed_using_default_media_service reason=%s", exc)
             xaddr = None
         self._media_service_url = self.url(xaddr) if xaddr else self.default_media_service_url
+        LOGGER.debug("onvif_media_service_url url=%s discovered=%s", self._media_service_url, xaddr is not None)
         return self._media_service_url
 
     async def soap_request(
@@ -229,17 +242,19 @@ class LightweightOnvifClient:
     ) -> ElementTree.Element:
         timeout = aiohttp.ClientTimeout(total=self.config.timeout_seconds)
         connector = aiohttp.TCPConnector(ssl=self.config.verify_ssl)
-        middlewares = ()
-        if self.config.username and self.config.password:
-            middlewares = (aiohttp.DigestAuthMiddleware(self.config.username, self.config.password),)
+        auth = (
+            aiohttp.BasicAuth(self.config.username, self.config.password)
+            if self.config.username and self.config.password
+            else None
+        )
         headers = {
-            "Content-Type": f'application/soap+xml; charset=utf-8; action="{action}"',
+            "Content-Type": "text/xml; charset=utf-8",
             "SOAPAction": f'"{action}"',
         }
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout, connector=connector, middlewares=middlewares) as session:
-                async with session.post(url, data=self.soap_envelope(body).encode(), headers=headers) as response:
+            async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                async with session.post(url, data=self.soap_envelope(body).encode(), headers=headers, auth=auth) as response:
                     content = await response.read()
                     raise_for_status(response.status, content, url, operation)
                     return parse_soap_response(content, operation)
@@ -251,10 +266,12 @@ class LightweightOnvifClient:
             raise OnvifConnectionError(f"ONVIF {operation} connection failed for {url}: {exc}") from exc
 
     def soap_envelope(self, body: str) -> str:
+        header = self.wsse_header()
         return (
             f'<s:Envelope xmlns:s="{SOAP_ENV_NS}" xmlns:tds="{DEVICE_NS}" '
-            f'xmlns:trt="{MEDIA_NS}" xmlns:wsse="{WSSE_NS}" xmlns:wsu="{WSU_NS}">'
-            f"{self.wsse_header()}"
+            f'xmlns:trt="{MEDIA_NS}" '
+            f'xmlns:wsse="{WSSE_NS}" xmlns:wsu="{WSU_NS}">'
+            f"{header}"
             f"<s:Body>{body}</s:Body>"
             "</s:Envelope>"
         )
@@ -269,7 +286,7 @@ class LightweightOnvifClient:
         ).decode()
         nonce_text = base64.b64encode(nonce).decode()
         return (
-            '<s:Header><wsse:Security s:mustUnderstand="true">'
+            '<s:Header><wsse:Security s:mustUnderstand="1">'
             "<wsse:UsernameToken>"
             f"<wsse:Username>{escape(self.config.username)}</wsse:Username>"
             f'<wsse:Password Type="{PASSWORD_DIGEST_TYPE}">{password_digest}</wsse:Password>'
@@ -284,6 +301,7 @@ def raise_for_status(status: int, body: bytes, url: str, operation: str) -> None
     if status in {401, 403}:
         raise OnvifAuthError(f"ONVIF {operation} authentication failed for {url}: HTTP {status}")
     if not 200 <= status < 300:
+        LOGGER.warning("onvif_http_error status=%s url=%s body=%s", status, url, body.decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " "))
         raise OnvifResponseError(f"ONVIF {operation} request failed for {url}: HTTP {status}: {_preview(body)}")
 
 
@@ -322,6 +340,15 @@ def _attribute(element: ElementTree.Element, name: str) -> str | None:
     return None
 
 
+def _media_section_xaddr(root: ElementTree.Element) -> str | None:
+    for element in root.iter():
+        if _local_name(element.tag) == "Media":
+            for child in element.iter():
+                if _local_name(child.tag) == "XAddr" and child.text and child.text.strip():
+                    return child.text.strip()
+    return None
+
+
 def _first_text(root: ElementTree.Element, name: str) -> str | None:
     for element in root.iter():
         if _local_name(element.tag) == name and element.text:
@@ -348,4 +375,4 @@ def _local_name(tag: str) -> str:
 
 
 def _preview(body: bytes) -> str:
-    return body[:200].decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")
+    return body[:500].decode("utf-8", errors="replace").replace("\r", " ").replace("\n", " ")
