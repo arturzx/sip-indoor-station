@@ -19,7 +19,7 @@ def handle(server: SipServer, data: bytes) -> list:
 
 
 AKUVOX_KEEPALIVE = b"jaK\x00"
-MALFORMED_SIP = b"NOT_A_METHOD sip:foo SIP/2.0\r\n\r\n"
+MALFORMED_SIP = b"garbage\r\n\r\n"
 
 
 def test_akuvox_keepalive_logged_at_debug_when_vendor_akuvox(caplog):
